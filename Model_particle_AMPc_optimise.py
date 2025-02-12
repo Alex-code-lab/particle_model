@@ -134,6 +134,79 @@ def plot_camp_field(camp_field, space_size, iteration, vmin=0, vmax=10000.0):
     plt.show()
     plt.close()
 
+def plot_combined_state(cells, camp_field, SPACE_SIZE, iteration, PATH, device):
+    """
+    Trace une figure combinée avec 4 sous-graphes :
+      1) Environnement (positions des cellules + champ de cAMP en arrière-plan)
+      2) Champ de cAMP complet
+      3) Moyenne locale de l'état A
+      4) Moyenne locale de l'état R
+
+    Paramètres:
+      - cells      : Liste des objets CellAgent.
+      - camp_field : Objet cAMP contenant le champ de signal.
+      - SPACE_SIZE : Taille de l'espace de simulation (en μm).
+      - iteration  : Indice de l'itération (pour l'affichage du temps).
+      - PATH       : Chemin de sauvegarde de l'image.
+      - device     : Device utilisé (GPU/CPU), pour les opérations torch.
+    """
+    fig, axes = plt.subplots(1, 4, figsize=(20, 5), constrained_layout=True)
+    
+    # Calcul des grilles pour l'affichage des moyennes de A et R
+    grid_size = camp_field.grid_size
+    A_grid = torch.zeros((grid_size, grid_size), device=device)
+    R_grid = torch.zeros((grid_size, grid_size), device=device)
+    cell_counts = torch.zeros((grid_size, grid_size), device=device)
+
+    # Remplissage des grilles avec les valeurs des cellules
+    for cell in cells:
+        x_idx = int(cell.position[0].item() / camp_field.grid_resolution) % grid_size
+        y_idx = int(cell.position[1].item() / camp_field.grid_resolution) % grid_size
+        A_grid[x_idx, y_idx] += cell.A
+        R_grid[x_idx, y_idx] += cell.R
+        cell_counts[x_idx, y_idx] += 1
+
+    # Éviter la division par zéro en remplaçant les cases vides par 1
+    cell_counts = torch.where(cell_counts == 0, torch.ones_like(cell_counts), cell_counts)
+    A_avg = A_grid / cell_counts
+    R_avg = R_grid / cell_counts
+
+    extent = [0, SPACE_SIZE, 0, SPACE_SIZE]
+
+    # 1) Environnement : positions des cellules et champ de cAMP
+    im0 = plot_environment(cells, camp_field, SPACE_SIZE, axis=axes[0], iteration=iteration)
+    fig.colorbar(im0, ax=axes[0], shrink=0.6, aspect=20, label='Concentration de cAMP')
+
+    # 2) Champ de cAMP complet
+    im1 = axes[1].imshow(camp_field.signal.cpu().numpy().T, origin='lower', extent=extent,
+                           cmap='viridis', alpha=0.8, vmin=0, vmax=15)
+    axes[1].set_title(f'Champ de cAMP à l\'itération {iteration}')
+    axes[1].set_xlabel('X (μm)')
+    axes[1].set_ylabel('Y (μm)')
+    fig.colorbar(im1, ax=axes[1], shrink=0.6, aspect=20, label='cAMP')
+
+    # 3) Moyenne locale de l'état A
+    vmax_A = A_avg.max().item() if A_avg.max() > 0 else 1
+    im2 = axes[2].imshow(A_avg.cpu().numpy().T, origin='lower', extent=extent,
+                           cmap='GnBu', alpha=0.8, vmin=0, vmax=vmax_A)
+    axes[2].set_title(f'Concentration de A à l\'itération {iteration}')
+    axes[2].set_xlabel('X (μm)')
+    axes[2].set_ylabel('Y (μm)')
+    fig.colorbar(im2, ax=axes[2], shrink=0.6, aspect=20, label='A')
+
+    # 4) Moyenne locale de l'état R
+    vmax_R = R_avg.max().item() if R_avg.max() > 0 else 1
+    im3 = axes[3].imshow(R_avg.cpu().numpy().T, origin='lower', extent=extent,
+                           cmap='BuGn', alpha=0.8, vmin=0, vmax=vmax_R)
+    axes[3].set_title(f'Concentration de R à l\'itération {iteration}')
+    axes[3].set_xlabel('X (μm)')
+    axes[3].set_ylabel('Y (μm)')
+    fig.colorbar(im3, ax=axes[3], shrink=0.6, aspect=20, label='R')
+
+    # Sauvegarde et affichage
+    plt.savefig(f'{PATH}combined_{iteration}.png', bbox_inches='tight', dpi=300, pad_inches=0)
+    plt.close()
+
 def plot_function(pas, Req, R0, Frep, Fadh, a, coeff_rep):
     """
     Trace les courbes des forces de répulsion et d'adhésion en fonction de la distance.
@@ -230,8 +303,8 @@ class CellAgent:
         # La direction initiale est obtenue en normalisant la vitesse
         self.direction = torch.nn.functional.normalize(velocity, p=2, dim=0)
         # États internes du modèle de FitzHugh-Nagumo
-        self.A = torch.tensor(0.5, device=device)
-        self.R = torch.tensor(0.5, device=device)
+        self.A = torch.tensor(1.0, device=device)
+        self.R = torch.tensor(1.0, device=device)
         self.cell_params = cell_params
         # Paramètres liés à la production de cAMP
         self.D = cell_params['D']
@@ -499,20 +572,50 @@ SPACE_SIZE = 50  # μm  # Taille de l'espace de simulation (longueur d'un côté
 TIME_SIMU = 1000  # min  # Durée totale de la simulation
 
 # Paramètre pour la perception du gradient par les cellules
-R_SENSING_GRAD = 4.0  # μm  # Distance sur laquelle une cellule peut détecter le gradient de cAMP
+R_SENSING_GRAD = 5.0  # μm  # Distance sur laquelle une cellule peut détecter le gradient de cAMP
 
 # =============================================================================
 # Paramètres du modèle de FitzHugh-Nagumo et de la diffusion du cAMP
 # =============================================================================
-
+# ===============================================================
+# ===============================================================
+# Rappel du modèle et des variables (FitzHugh-Nagumo et chimiotaxie) :
+#
+# A (activateur) :
+#   - Représente l'état d'excitation de la cellule.
+#   - Évolue selon l'équation : dA/dt = A - (A^3)/3 - R + I_S + bruit,
+#     où I_S est le terme d'excitation induit par le cAMP (ex : I_S = a * log1p(signal/Kd)).
+#
+# R (répresseur) :
+#   - Représente la variable de récupération qui freine l'excitation (A).
+#   - Son évolution suit : dR/dt = ε * (A - γR + c0),
+#     permettant à la cellule de revenir à un état de repos après excitation.
+#
+# I_S (excitation par cAMP) :
+#   - Dépend de la concentration locale de cAMP et module l'excitation de A.
+#
+# chemotaxis_sensitivity :
+#   - Paramètre (dans cell_params) qui détermine l'influence du gradient de cAMP sur
+#     la mise à jour de la direction de la cellule.
+#   - Une valeur proche de 1 signifie que la cellule suit fortement le gradient,
+#     alors qu'une valeur proche de 0 lui fait conserver sa direction.
+#
+# sensitivity_cAMP_threshold :
+#   - Seuil spécifique à chaque cellule.
+#   - La cellule ne calcule et ne suit le gradient de cAMP que si la concentration locale
+#     dépasse ce seuil.
+#
+# Ce modèle permet ainsi de simuler la dynamique d'excitation/récupération cellulaire et
+# la réponse directionnelle (chimiotaxie) aux gradients de cAMP.
+# ===============================================================
 cell_params = {
     # Paramètres du modèle FitzHugh-Nagumo pour la dynamique d'excitation et de récupération des cellules
-    'c0': 0.1,  # a.u.  # Terme constant influençant l'évolution de R (peut stabiliser les oscillations)
+    'c0': 0.5,  # a.u.  # Terme constant influençant l'évolution de R (peut stabiliser les oscillations)
     'a': 2.0,  # a.u.  # Intensité du terme de stimulation dans l'équation de A (impacte l'excitabilité)
-    'gamma': 1,  # min⁻¹  # Facteur de couplage entre A et R (contrôle la relaxation de R)
-    'Kd': 0.1,  # a.u.  # Constante de dissociation pour le signal cAMP (module la sensibilité au cAMP)
-    'sigma': 0.1,  # a.u.  # Amplitude du bruit aléatoire ajouté à A (simule des fluctuations)
-    'epsilon': 0.2,  # min⁻¹  # Facteur d'échelle pour la mise à jour de R (contrôle la rapidité de réponse)
+    'gamma': 2,  # min⁻¹  # Facteur de couplage entre A et R (contrôle la relaxation de R)
+    'Kd': 0.5,  # a.u.  # Constante de dissociation pour le signal cAMP (module la sensibilité au cAMP)
+    'sigma': 0.01,  # a.u.  # Amplitude du bruit aléatoire ajouté à A (simule des fluctuations)
+    'epsilon': 0.01,  # min⁻¹  # Facteur d'échelle pour la mise à jour de R (contrôle la rapidité de réponse)
 
     # Paramètres de production de cAMP
     'D': 2500.0,  # a.u.  # Quantité de cAMP produite par une cellule lorsque A dépasse le seuil af
@@ -555,7 +658,7 @@ FLUCTUATION_FACTOR = 3  # Adimensionnel  # Facteur de fluctuation aléatoire du 
 # Détermination du nombre de cellules
 # =============================================================================
 
-PACKING_FRACTION = 0.004  # Adimensionnel  # Fraction d'empaquetage des cellules dans l'espace
+PACKING_FRACTION = 0.04 #0.004  # Adimensionnel  # Fraction d'empaquetage des cellules dans l'espace
 N_CELLS = int((PACKING_FRACTION * SPACE_SIZE ** 2) / (math.pi * ((R_EQ / 2) ** 2)))  # Nombre total de cellules
 print(N_CELLS, "cells")  # Affichage du nombre de cellules générées
 
@@ -570,7 +673,7 @@ ECART_TYPE_POP1 = 0.3  # μm/min  # Écart-type de la vitesse de déplacement
 NOISE_POP_1 = 0 * 8  # Adimensionnel  # Intensité du bruit ajouté au mouvement
 TAU_POP_1 = 5  # min  # Temps caractéristique de la persistance directionnelle
 PERSISTENCE_POP1 = 0  # Adimensionnel  # Niveau de persistance du mouvement
-SENSITIVITY_cAMP_THRESHOLD_POP1 = 5  # a.u.  # Seuil de sensibilité au cAMP
+SENSITIVITY_cAMP_THRESHOLD_POP1 = 2  # a.u.  # Seuil de sensibilité au cAMP
 
 # Population 2 (ex: cellules plus mobiles)
 velocity_magnitude_pop2 = 0 * 8  # μm/min  # Vitesse moyenne des cellules de la population 2
@@ -578,7 +681,7 @@ ECART_TYPE_POP2 = 0.5  # μm/min  # Écart-type de la vitesse de déplacement
 NOISE_POP_2 = 0 * 5  # Adimensionnel  # Intensité du bruit ajouté au mouvement
 TAU_POP_2 = 5  # min  # Temps caractéristique de la persistance directionnelle
 PERSISTENCE_POP2 = 0  # Adimensionnel  # Niveau de persistance du mouvement
-SENSITIVITY_cAMP_THRESHOLD_POP2 = 5  # a.u.  # Seuil de sensibilité au cAMP
+SENSITIVITY_cAMP_THRESHOLD_POP2 = 2  # a.u.  # Seuil de sensibilité au cAMP
 
 
 # Initialisation d'un compteur global pour l'identifiant des cellules
@@ -646,6 +749,7 @@ if PLOT:
     # Tracé de l'état initial (positions des cellules et champ de cAMP)
     fig, ax = plt.subplots(figsize=(6, 6))
     plot_environment(cells, camp_field, SPACE_SIZE, axis=ax, iteration=0)
+    plot_combined_state(cells, camp_field, SPACE_SIZE, 0, PATH, device)
     plt.savefig(f'{PATH}image_0.png', bbox_inches='tight', dpi=300, pad_inches=0)
     plt.close()
 
@@ -745,72 +849,73 @@ while time < TIME_SIMU:
     
     # Tracé périodique de l'état de la simulation en 4 sous-graphes
     if PLOT and (iteration % PLOT_INTERVAL == 0):
-        # Création de la figure avec 4 sous-graphes
-        fig, axes = plt.subplots(1, 4, figsize=(20, 5), constrained_layout=True)
+        plot_combined_state(cells, camp_field, SPACE_SIZE, iteration, PATH, device)
+        # # Création de la figure avec 4 sous-graphes
+        # fig, axes = plt.subplots(1, 4, figsize=(20, 5), constrained_layout=True)
 
-        # =============================================================================
-        # Calcul des grilles pour l'affichage des moyennes de A et R
-        # =============================================================================
-        grid_size = camp_field.grid_size
-        A_grid = torch.zeros((grid_size, grid_size), device=device)
-        R_grid = torch.zeros((grid_size, grid_size), device=device)
-        cell_counts = torch.zeros((grid_size, grid_size), device=device)
+        # # =============================================================================
+        # # Calcul des grilles pour l'affichage des moyennes de A et R
+        # # =============================================================================
+        # grid_size = camp_field.grid_size
+        # A_grid = torch.zeros((grid_size, grid_size), device=device)
+        # R_grid = torch.zeros((grid_size, grid_size), device=device)
+        # cell_counts = torch.zeros((grid_size, grid_size), device=device)
 
-        # Remplissage des grilles avec les valeurs des cellules
-        for cell in cells:
-            x_idx = int(cell.position[0].item() / camp_field.grid_resolution) % grid_size
-            y_idx = int(cell.position[1].item() / camp_field.grid_resolution) % grid_size
-            A_grid[x_idx, y_idx] += cell.A
-            R_grid[x_idx, y_idx] += cell.R
-            cell_counts[x_idx, y_idx] += 1
+        # # Remplissage des grilles avec les valeurs des cellules
+        # for cell in cells:
+        #     x_idx = int(cell.position[0].item() / camp_field.grid_resolution) % grid_size
+        #     y_idx = int(cell.position[1].item() / camp_field.grid_resolution) % grid_size
+        #     A_grid[x_idx, y_idx] += cell.A
+        #     R_grid[x_idx, y_idx] += cell.R
+        #     cell_counts[x_idx, y_idx] += 1
 
-        # Éviter la division par zéro en remplaçant les cases vides par 1
-        cell_counts = torch.where(cell_counts == 0, torch.ones_like(cell_counts), cell_counts)
-        A_avg = A_grid / cell_counts
-        R_avg = R_grid / cell_counts
+        # # Éviter la division par zéro en remplaçant les cases vides par 1
+        # cell_counts = torch.where(cell_counts == 0, torch.ones_like(cell_counts), cell_counts)
+        # A_avg = A_grid / cell_counts
+        # R_avg = R_grid / cell_counts
 
-        # =============================================================================
-        # 1) Environnement : positions des cellules et champ de cAMP
-        # =============================================================================
-        im0 = plot_environment(cells, camp_field, SPACE_SIZE, axis=axes[0], iteration=iteration)
-        cbar0 = fig.colorbar(im0, ax=axes[0], shrink=0.6, aspect=20, label='Concentration de cAMP')
+        # # =============================================================================
+        # # 1) Environnement : positions des cellules et champ de cAMP
+        # # =============================================================================
+        # im0 = plot_environment(cells, camp_field, SPACE_SIZE, axis=axes[0], iteration=iteration)
+        # cbar0 = fig.colorbar(im0, ax=axes[0], shrink=0.6, aspect=20, label='Concentration de cAMP')
 
-        # =============================================================================
-        # 2) Champ de cAMP complet
-        # =============================================================================
-        extent = [0, SPACE_SIZE, 0, SPACE_SIZE]
-        im1 = axes[1].imshow(camp_field.signal.cpu().numpy().T, origin='lower', extent=extent,
-                            cmap='viridis', alpha=0.8, vmin=0, vmax=15)
-        axes[1].set_title(f'Champ de cAMP à l\'itération {iteration}')
-        axes[1].set_xlabel('X (μm)')
-        axes[1].set_ylabel('Y (μm)')
-        cbar1 = fig.colorbar(im1, ax=axes[1], shrink=0.6, aspect=20, label='cAMP')
+        # # =============================================================================
+        # # 2) Champ de cAMP complet
+        # # =============================================================================
+        # extent = [0, SPACE_SIZE, 0, SPACE_SIZE]
+        # im1 = axes[1].imshow(camp_field.signal.cpu().numpy().T, origin='lower', extent=extent,
+        #                     cmap='viridis', alpha=0.8, vmin=0, vmax=15)
+        # axes[1].set_title(f'Champ de cAMP à l\'itération {iteration}')
+        # axes[1].set_xlabel('X (μm)')
+        # axes[1].set_ylabel('Y (μm)')
+        # cbar1 = fig.colorbar(im1, ax=axes[1], shrink=0.6, aspect=20, label='cAMP')
 
-        # =============================================================================
-        # 3) Moyenne locale de l'état A
-        # =============================================================================
-        im2 = axes[2].imshow(A_avg.cpu().numpy().T, origin='lower', extent=extent,
-                            cmap='GnBu', alpha=0.8, vmin=0, vmax=A_avg.max().item() if A_avg.max() > 0 else 1)
-        axes[2].set_title(f'Concentration de A à l\'itération {iteration}')
-        axes[2].set_xlabel('X (μm)')
-        axes[2].set_ylabel('Y (μm)')
-        cbar2 = fig.colorbar(im2, ax=axes[2], shrink=0.6, aspect=20, label='A')
+        # # =============================================================================
+        # # 3) Moyenne locale de l'état A
+        # # =============================================================================
+        # im2 = axes[2].imshow(A_avg.cpu().numpy().T, origin='lower', extent=extent,
+        #                     cmap='GnBu', alpha=0.8, vmin=0, vmax=A_avg.max().item() if A_avg.max() > 0 else 1)
+        # axes[2].set_title(f'Concentration de A à l\'itération {iteration}')
+        # axes[2].set_xlabel('X (μm)')
+        # axes[2].set_ylabel('Y (μm)')
+        # cbar2 = fig.colorbar(im2, ax=axes[2], shrink=0.6, aspect=20, label='A')
 
-        # =============================================================================
-        # 4) Moyenne locale de l'état R
-        # =============================================================================
-        im3 = axes[3].imshow(R_avg.cpu().numpy().T, origin='lower', extent=extent,
-                            cmap='BuGn', alpha=0.8, vmin=0, vmax=R_avg.max().item() if R_avg.max() > 0 else 1)
-        axes[3].set_title(f'Concentration de R à l\'itération {iteration}')
-        axes[3].set_xlabel('X (μm)')
-        axes[3].set_ylabel('Y (μm)')
-        cbar3 = fig.colorbar(im3, ax=axes[3], shrink=0.6, aspect=20, label='R')
+        # # =============================================================================
+        # # 4) Moyenne locale de l'état R
+        # # =============================================================================
+        # im3 = axes[3].imshow(R_avg.cpu().numpy().T, origin='lower', extent=extent,
+        #                     cmap='BuGn', alpha=0.8, vmin=0, vmax=R_avg.max().item() if R_avg.max() > 0 else 1)
+        # axes[3].set_title(f'Concentration de R à l\'itération {iteration}')
+        # axes[3].set_xlabel('X (μm)')
+        # axes[3].set_ylabel('Y (μm)')
+        # cbar3 = fig.colorbar(im3, ax=axes[3], shrink=0.6, aspect=20, label='R')
 
-        # =============================================================================
-        # Sauvegarde et affichage
-        # =============================================================================
-        plt.savefig(f'{PATH}combined_{iteration}.png', bbox_inches='tight', dpi=300, pad_inches=0)
-        plt.close()
+        # # =============================================================================
+        # # Sauvegarde et affichage
+        # # =============================================================================
+        # plt.savefig(f'{PATH}combined_{iteration}.png', bbox_inches='tight', dpi=300, pad_inches=0)
+        # plt.close()
     
     # Mise à jour du temps et du compteur d'itération
     time += DELTA_T
