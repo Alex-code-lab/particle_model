@@ -311,7 +311,7 @@ class CellAgent:
 class Population:
     def __init__(self, num_cells, space_size, velocity_magnitude, persistence, min_distance,
                  pop_tag, ecart_type, tau, noise, cell_params, sensitivity_cAMP_threshold,
-                 basal_fraction=0.5):
+                 basal_fraction=0.1):
         """
         Représente une population de cellules dans la simulation.
 
@@ -465,14 +465,26 @@ class cAMP:
         """
         A_grid = torch.zeros_like(self.signal)
         if cells:
+            # for cell in cells:
+            #     x_idx = int(cell.position[0].item() / self.grid_resolution) % self.grid_size
+            #     y_idx = int(cell.position[1].item() / self.grid_resolution) % self.grid_size
+            #     # Production de cAMP de base (uniquement aux positions des cellules qui produisent)
+            #     A_grid[x_idx, y_idx] += cell.a0
+            #     # Production additionnelle si l'état A dépasse le seuil af
+            #     if cell.A > cell.af:
+            #         A_grid[x_idx, y_idx] += cell.D
             for cell in cells:
                 x_idx = int(cell.position[0].item() / self.grid_resolution) % self.grid_size
                 y_idx = int(cell.position[1].item() / self.grid_resolution) % self.grid_size
-                # Production de cAMP de base (uniquement aux positions des cellules qui produisent)
-                A_grid[x_idx, y_idx] += cell.a0
-                # Production additionnelle si l'état A dépasse le seuil af
-                if cell.A > cell.af:
-                    A_grid[x_idx, y_idx] += cell.D
+                # Lire le signal local de cAMP dans le milieu
+                local_signal = self.get_signal_at_position(cell.position)
+                # On ne déclenche la production (basale et additionnelle) que s'il y a déjà du cAMP dans le milieu
+                if local_signal > 0:  # Tu peux ajuster ce seuil si nécessaire
+                    # Ajout de la production basale
+                    A_grid[x_idx, y_idx] += cell.a0
+                    # Ajout de la production additionnelle si l'état A dépasse le seuil af
+                    if cell.A > cell.af:
+                        A_grid[x_idx, y_idx] += cell.D
         laplacian_S = self.compute_laplacian(self.signal)
         degradation_term = self.aPDE * self.signal if cells else 0.0
         self.signal += self.dt * (self.D_cAMP * laplacian_S - degradation_term + A_grid)
@@ -521,7 +533,7 @@ INITIAL_AMPc = True       # Si True, on injecte dès le début de la simulation 
 PLOT = True               # Active l'affichage et la sauvegarde des images
 
 # Paramètres de l'espace et du temps
-SPACE_SIZE = 50  # μm  # Taille de l'espace de simulation (longueur d'un côté du carré)
+SPACE_SIZE = 20  # μm  # Taille de l'espace de simulation (longueur d'un côté du carré)
 TIME_SIMU = 1000  # min  # Durée totale de la simulation
 
 # Paramètre pour la perception du gradient par les cellules
@@ -561,27 +573,31 @@ R_SENSING_GRAD = 5.0  # μm  # Distance sur laquelle une cellule peut détecter 
 # la réponse directionnelle (chimiotaxie) aux gradients de cAMP.
 # ===============================================================
 cell_params = {
-    'c0': 0.5,         # a.u. - Terme constant influençant l'évolution de R (stabilise les oscillations)
-    'a': 2.0,          # a.u. - Intensité du terme de stimulation dans l'équation de A (impacte l'excitabilité)
-    'gamma': 2,        # min⁻¹ - Facteur de couplage entre A et R (contrôle la relaxation de R)
-    'Kd': 0.5,         # a.u. - Constante de dissociation pour le cAMP (module la sensibilité)
-    'sigma': 0.01,     # a.u. - Amplitude du bruit aléatoire ajouté à A (fluctuations)
-    'epsilon': 0.1,   # min⁻¹ - Facteur d'échelle pour la mise à jour de R (rapidité de réponse)
-    'D': 25000.0,       # a.u. - Quantité de cAMP produite par une cellule lorsque A dépasse le seuil af
-    'a0': 150,          # a.u. - Production basale de cAMP, à utiliser pour certaines cellules
-    'af': 1,           # a.u. - Seuil d'activation : production additionnelle de cAMP si A dépasse ce seuil
-    'noise': True,     # Active ou désactive l'ajout d'un bruit aléatoire dans la mise à jour de A
-    'D_cAMP': 150.0,   # μm²/min - Coefficient de diffusion du cAMP
-    'aPDE': 150,        # min⁻¹ - Taux de dégradation du cAMP
-    'grid_resolution': 0.5,  # μm - Taille d'une case de la grille
-    'chemotaxis_sensitivity': 0.3  # Adimensionnel - Sensibilité des cellules au gradient de cAMP
+    'c0': 0.1, # 0.5,         # a.u. - Terme constant influençant l'évolution de R (stabilise les oscillations)
+    'a': 0.1, #2.0,          # a.u. - Intensité du terme de stimulation dans l'équation de A (impacte l'excitabilité)
+    'gamma': 0.15, #2,        # min⁻¹ - Facteur de couplage entre A et R (contrôle la relaxation de R)
+    'Kd': 5, #0.5,         # a.u. - Constante de dissociation pour le cAMP (module la sensibilité)
+    'sigma': 0.1,#  0.01,     # a.u. - Amplitude du bruit aléatoire ajouté à A (fluctuations)
+    'epsilon': 0.088, # 0.1,   # min⁻¹ - Facteur d'échelle pour la mise à jour de R (rapidité de réponse)
+    'D': 800.0,     # a.u. - Quantité de cAMP produite par une cellule lorsque A dépasse le seuil af
+    'a0': 10.0, #150,          # a.u. - Production basale de cAMP, à utiliser pour certaines cellules
+    'af': -1.2, #1,           # a.u. - Seuil d'activation : production additionnelle de cAMP si A dépasse ce seuil
+    'noise': False,     # Active ou désactive l'ajout d'un bruit aléatoire dans la mise à jour de A
+    'D_cAMP': 10, # 150.0,   # μm²/min - Coefficient de diffusion du cAMP
+    'aPDE': 1, # 150,        # min⁻¹ - Taux de dégradation du cAMP
+    'grid_resolution': 0.5, # 0.5,  # μm - Taille d'une case de la grille
+    'chemotaxis_sensitivity': 0.0, #0.3  # Adimensionnel - Sensibilité des cellules au gradient de cAMP
 }
 
 # =============================================================================
 # Calcul du pas de temps (DELTA_T) pour assurer la stabilité numérique
 # =============================================================================
 FACTEUR_SECURITE = 0.9  # Facteur de sécurité pour garantir la stabilité numérique
-DELTA_T = FACTEUR_SECURITE * (cell_params['grid_resolution'] ** 2) / (4 * cell_params['D_cAMP'])  # min
+# Exemple : Si D_cAMP est 0, on définit manuellement dt
+if cell_params['D_cAMP'] == 0:
+    DELTA_T = 0.001  # Valeur manuelle du pas de temps
+else:
+    DELTA_T = FACTEUR_SECURITE * (cell_params['grid_resolution'] ** 2) / (4 * cell_params['D_cAMP'])
 print("Intervalle de temps en min : ", DELTA_T)
 PLOT_INTERVAL = int(1 / DELTA_T)  # Nombre d'itérations entre deux tracés
 
@@ -633,21 +649,25 @@ cell_id_counter = 0
 # Création de deux populations distinctes
 # =============================================================================
 # Le paramètre basal_fraction détermine la fraction de cellules ayant une production basale non nulle.
-population1 = Population(num_cells=int(N_CELLS / 2), space_size=SPACE_SIZE,
+pop1 = N_CELLS // 2        # Nombre entier de cellules dans la première population
+pop2 = N_CELLS - pop1      # Le reste dans la deuxième population
+
+                         
+population1 = Population(num_cells=pop1, space_size=SPACE_SIZE,
                          velocity_magnitude=velocity_magnitude_pop1,
                          persistence=PERSISTENCE_POP1, ecart_type=ECART_TYPE_POP1,
                          min_distance=MIN_DISTANCE_INIT, pop_tag="Population 1",
                          tau=TAU_POP_1, noise=NOISE_POP_1, cell_params=cell_params,
                          sensitivity_cAMP_threshold=SENSITIVITY_cAMP_THRESHOLD_POP1,
-                         basal_fraction=0.5)
+                         basal_fraction=0.15)
 
-population2 = Population(num_cells=int(N_CELLS / 2), space_size=SPACE_SIZE,
+population2 = Population(num_cells=pop2, space_size=SPACE_SIZE,
                          velocity_magnitude=velocity_magnitude_pop2,
                          persistence=PERSISTENCE_POP2, ecart_type=ECART_TYPE_POP2,
                          min_distance=MIN_DISTANCE_INIT, pop_tag="Population 2",
                          tau=TAU_POP_2, noise=NOISE_POP_2, cell_params=cell_params,
                          sensitivity_cAMP_threshold=SENSITIVITY_cAMP_THRESHOLD_POP2,
-                         basal_fraction=0.5)
+                         basal_fraction=0.15)
 
 # Fusion des cellules des deux populations
 cells = population1.cells + population2.cells
