@@ -173,7 +173,7 @@ def plot_combined_state(cells, camp_field, SPACE_SIZE, iteration, PATH, device):
     fig.colorbar(im0, ax=axes[0], shrink=0.6, aspect=20, label='Concentration de cAMP')
 
     im1 = axes[1].imshow(camp_field.signal.cpu().numpy().T, origin='lower', extent=extent,
-                           cmap='viridis', alpha=0.8, vmin=0, vmax=15)
+                           cmap='viridis', alpha=0.8, vmin=0, vmax=5)
     axes[1].set_title(f'Champ de cAMP à l\'itération {iteration}')
     axes[1].set_xlabel('X (μm)')
     axes[1].set_ylabel('Y (μm)')
@@ -541,7 +541,7 @@ class cAMP:
                 # Ici, on répartit la production sur un patch défini par prod_radius
                 # Pour production basale (cell.a0)
                 # Si vous souhaitez production inconditionnelle dès que A > af, vous pouvez enlever la condition sur local_signal
-                if local_signal > 0:
+                if local_signal > 1e-6:
                     cell.camp_production += cell.a0  # production basale cumulée
                     # Répartition de la production basale sur le patch selon le noyau gaussien
                     for dx in range(-self.prod_radius, self.prod_radius + 1):
@@ -550,7 +550,7 @@ class cAMP:
                             yy = (y_idx + dy) % self.grid_size
                             weight = self.kernel[dx + self.prod_radius, dy + self.prod_radius]
                             A_grid[xx, yy] += cell.a0 * weight
-                    
+                        
                     # Production additionnelle si A > af
                     if cell.A > cell.af:
                         cell.camp_production += cell.D  # production spike cumulée
@@ -626,12 +626,12 @@ cell_params = {
     'Kd': 5,              # a.u. - Constante de dissociation pour le cAMP (module la sensibilité)
     'sigma': 0.1,         # a.u. - Amplitude du bruit aléatoire ajouté à A (fluctuations)
     'epsilon': 0.088,     # min⁻¹ - Facteur d'échelle pour la mise à jour de R
-    'D': 5.0,            # a.u. - Quantité de cAMP produite par une cellule lorsque A dépasse le seuil af
-    'a0': 1.0,            # a.u. - Production basale de cAMP, à utiliser pour certaines cellules
+    'D': 8.0,            # a.u. - Quantité de cAMP produite par une cellule lorsque A dépasse le seuil af
+    'a0': 2.0,            # a.u. - Production basale de cAMP, à utiliser pour certaines cellules
     'af': -1.2,           # a.u. - Seuil d'activation : production additionnelle de cAMP si A dépasse ce seuil
     'noise': False,       # Désactivation du bruit dans la mise à jour de A
     'D_cAMP': 0.1,        # μm²/min - Coefficient de diffusion du cAMP
-    'aPDE': 1.5,          # min⁻¹ - Taux de dégradation du cAMP
+    'aPDE': 1, #1.5,          # min⁻¹ - Taux de dégradation du cAMP
     'grid_resolution': 0.5,  # μm - Taille d'une case de la grille
     'chemotaxis_sensitivity': 0.0,  # Sensibilité des cellules au gradient de cAMP (non utilisée ici)
 }
