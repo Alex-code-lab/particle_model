@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Simulation du modèle de particules avec diffusion de cAMP et mise à jour des états cellulaires.
+Simulation du modèle de particules avec diffusion de cAMP, mise à jour des états cellulaires 
+et intégration de la cinétique de liaison du cAMP aux récepteurs (variable L).
+
 Auteur : Souchaud Alexandre
 Date   : 2025-02-11
 
-Ce script simule l'interaction entre des cellules qui évoluent dans un espace 2D.
-Les cellules interagissent par des forces de répulsion et d'adhésion et communiquent
-via la production et la diffusion d'une molécule de signalisation, le cAMP.
-La dynamique cellulaire est décrite par un modèle type FitzHugh–Nagumo.
-Ici, le terme constant c₀ de l'équation de R est remplacé par la concentration locale en cAMP
-(obtenue dans le champ diffusé), de sorte que le système d'une cellule se déclenche en oscillant
-et produit du cAMP uniquement si la concentration locale dépasse un certain niveau.
-Le script enregistre également le tracé des oscillations (A, R, cAMP local et production cumulative)
+Ce script simule l'interaction entre des cellules dans un espace 2D. Les cellules 
+interagissent via des forces d'adhésion et de répulsion et communiquent grâce à la production 
+et diffusion du cAMP. La dynamique interne des cellules est modélisée par le système 
+FitzHugh–Nagumo, auquel on ajoute une dynamique de liaison des récepteurs.
+La variable L représente la fraction des récepteurs liés et suit :
+    dL/dt = k_on * [cAMP] * (1 - L) - k_off * L.
+Cette variable est utilisée pour définir l'impulsion d'activation I_S dans le modèle FHN.
+De plus, chaque cellule démarre en état "latent" (A et R figés à 0) et ne s'active que lorsque 
+L dépasse un seuil d'activation (activation_threshold_cAMP).
+Le script enregistre également les oscillations (A, R, cAMP local et production cumulative)
 pour la première cellule, afin de valider la production continue de cAMP.
 """
 
@@ -173,7 +177,7 @@ def plot_combined_state(cells, camp_field, SPACE_SIZE, iteration, PATH, device):
     fig.colorbar(im0, ax=axes[0], shrink=0.6, aspect=20, label='Concentration de cAMP')
 
     im1 = axes[1].imshow(camp_field.signal.cpu().numpy().T, origin='lower', extent=extent,
-                           cmap='viridis', alpha=0.8, vmin=0, vmax=3)
+                           cmap='viridis', alpha=0.8, vmin=0, vmax=15)
     axes[1].set_title(f'Champ de cAMP à l\'itération {iteration}')
     axes[1].set_xlabel('X (μm)')
     axes[1].set_ylabel('Y (μm)')
@@ -181,7 +185,7 @@ def plot_combined_state(cells, camp_field, SPACE_SIZE, iteration, PATH, device):
 
     vmax_A = A_avg.max().item() if A_avg.max() > 0 else 1
     im2 = axes[2].imshow(A_avg.cpu().numpy().T, origin='lower', extent=extent,
-                           cmap='GnBu', alpha=0.8, vmin=0, vmax=3) #vmax_A)
+                           cmap='GnBu', alpha=0.8, vmin=-3, vmax=3)
     axes[2].set_title(f'Concentration de A à l\'itération {iteration}')
     axes[2].set_xlabel('X (μm)')
     axes[2].set_ylabel('Y (μm)')
@@ -189,7 +193,7 @@ def plot_combined_state(cells, camp_field, SPACE_SIZE, iteration, PATH, device):
 
     vmax_R = R_avg.max().item() if R_avg.max() > 0 else 1
     im3 = axes[3].imshow(R_avg.cpu().numpy().T, origin='lower', extent=extent,
-                           cmap='BuGn', alpha=0.8, vmin=0, vmax=3)#vmax_R)
+                           cmap='BuGn', alpha=0.8, vmin=-3, vmax=3)
     axes[3].set_title(f'Concentration de R à l\'itération {iteration}')
     axes[3].set_xlabel('X (μm)')
     axes[3].set_ylabel('Y (μm)')
@@ -260,9 +264,10 @@ class CellAgent:
         """
         Représente une cellule individuelle dans la simulation.
         
-        Les états internes (A, R) sont décrits par le modèle FitzHugh–Nagumo.
-        Ici, le terme constant dans l'équation de R est remplacé par la concentration locale en cAMP.
-        Ainsi, dès que cette concentration dépasse un certain niveau, le système se déclenche et la cellule produit du cAMP.
+        Les états internes (A, R) sont décrits par le modèle FitzHugh–Nagumo. 
+        Ici, le terme constant de l'équation de R est remplacé par la concentration locale en cAMP.
+        De plus, une dynamique de liaison du cAMP aux récepteurs est ajoutée via la variable L.
+        Ainsi, la réponse cellulaire (oscillations de A et R) est déclenchée lorsque L dépasse un seuil.
         
         Paramètres:
             id                         : Identifiant unique de la cellule.
@@ -276,7 +281,7 @@ class CellAgent:
             noise                      : Intensité du bruit dans la mise à jour de la direction.
             cell_params                : Dictionnaire de paramètres cellulaires.
             sensitivity_cAMP_threshold : Seuil pour la détection du cAMP.
-            basal_value                : Valeur de production basale (peut être non nulle).
+            basal_value                : Valeur de production basale.
             A_init, R_init             : États internes initiaux du modèle FitzHugh–Nagumo.
         """
         self.id = id
@@ -301,32 +306,67 @@ class CellAgent:
         # Attribut pour cumuler la production de cAMP (validation de la production continue)
         self.camp_production = 0.0
 
+        # ==============================
+        # État latent et initialisation de la dynamique des récepteurs
+        # ==============================
+        self.is_latent = True  # Par défaut, la cellule commence en mode "latent"
+        self.L = torch.tensor(0.0, device=device, dtype=torch.float)  # Fraction de récepteurs liés (0 à 1)
+        # ==============================
+
     def update_state(self, signal_value, dt):
         """
-        Met à jour les états internes A et R en fonction du signal local de cAMP.
+        Met à jour les états internes A et R en fonction du signal local de cAMP et 
+        de la dynamique de liaison des récepteurs.
         
-        Équations du modèle FitzHugh–Nagumo :
-            dA/dt = A - A³/3 - R + I_S
-            dR/dt = ε * (A - γR + cAMP_local)
-        
-        où I_S = a * log1p(signal_value/Kd) et cAMP_local est égal à signal_value.
+        La mise à jour se fait en deux étapes :
+          1. Mise à jour de la variable L par la cinétique de liaison/dissociation :
+             dL/dt = k_on * [cAMP] * (1 - L) - k_off * L.
+          2. Si la cellule est en mode latent et que L est inférieur au seuil d'activation,
+             on force A et R à 0. Sinon, la cellule sort de l'état latent et on applique le modèle FitzHugh–Nagumo classique :
+                dA/dt = A - A³/3 - R + I_S
+                dR/dt = ε * (A - γR + [cAMP])
+             où I_S = a * log1p(L/Kd).
         
         Paramètres:
-            signal_value : Concentration locale de cAMP (obtenue depuis le champ).
+            signal_value : Concentration locale de cAMP (extrait du champ).
             dt           : Pas de temps.
         """
+        # Mise à jour de la dynamique de liaison des récepteurs
+        kon = self.cell_params.get('kon', 0.1)   # Constante de liaison (par défaut 0.1)
+        koff = self.cell_params.get('koff', 0.1)   # Constante de dissociation (par défaut 0.1)
+        dL = (kon * signal_value * (1 - self.L) - koff * self.L) * dt
+        self.L += dL
+        self.L = torch.clamp(self.L, 0, 1)  # S'assurer que L reste entre 0 et 1
+
+        activation_threshold = self.cell_params['activation_threshold_cAMP']
+        if self.is_latent:
+            # Tant que la fraction de récepteurs liés est inférieure au seuil,
+            # la cellule reste en mode latent avec A et R à 0.
+            if self.L < activation_threshold:
+                self.A = torch.tensor(0.0, device=device)
+                self.R = torch.tensor(0.0, device=device)
+                return
+            else:
+                self.is_latent = False  # La cellule s'active
+
+        # Une fois activée, appliquer le modèle FitzHugh–Nagumo avec I_S défini par L.
         a = self.cell_params['a']
         Kd = self.cell_params['Kd']
         gamma = self.cell_params['gamma']
         epsilon = self.cell_params['epsilon']
         sigma = self.cell_params['sigma']
         noise_flag = self.cell_params.get('noise', True)
-        I_S = a * torch.log1p(signal_value / Kd)
+        
+        # Calcul de l'impulsion d'activation I_S basée sur L (fraction de récepteurs liés)
+        I_S = a * torch.log1p(self.L / Kd)
+        
+        # Mise à jour de A avec ajout éventuel de bruit
         dA = (self.A - (self.A ** 3) / 3 - self.R + I_S) * dt
         if noise_flag:
             dA += sigma * math.sqrt(dt) * torch.randn((), device=device)
         self.A += dA
-        # Le terme constant est remplacé par la concentration locale en cAMP
+        
+        # Mise à jour de R
         dR = (self.A - gamma * self.R + signal_value) * epsilon * dt
         self.R += dR
 
@@ -380,7 +420,9 @@ class Population:
         positions = torch.rand((self.num_cells, 2), device=device) * self.space_size
         directions = torch.nn.functional.normalize(torch.empty_like(positions).uniform_(-1, 1), dim=1)
         speeds = torch.normal(mean=self.velocity_magnitude, std=self.ecart_type, size=(self.num_cells,), device=device)
+        
         if self.min_distance != 0:
+            # On essaie de placer les cellules en respectant la min_distance
             grid_size = int(np.ceil(self.space_size / self.min_distance))
             grid = [[[] for _ in range(grid_size)] for _ in range(grid_size)]
             for i, position in enumerate(positions):
@@ -419,6 +461,7 @@ class Population:
                     else:
                         position = torch.rand(2, device=device) * self.space_size
         else:
+            # Placement sans contrainte de distance
             for i, position in enumerate(positions):
                 velocity = directions[i] * speeds[i]
                 if random.random() < self.basal_fraction:
@@ -464,11 +507,10 @@ class cAMP:
         self.X, self.Y = torch.meshgrid(x, y, indexing='ij')
         self.signal = torch.zeros((self.grid_size, self.grid_size), device=device)
         
-        # Nouveau : définition du rayon de répartition pour la production de cAMP et calcul du noyau gaussien
-        self.prod_radius = 3  # Rayon pour répartir la production sur le patch (vous pouvez ajuster cette valeur)
+        # Définition du rayon de répartition pour la production de cAMP et calcul du noyau gaussien
+        self.prod_radius = 3  # Rayon pour répartir la production sur le patch (ajustable)
         kernel_size = 2 * self.prod_radius + 1
         sigma = self.prod_radius / 2.0  # écart-type pour le noyau gaussien (ajustable)
-        # Création du noyau gaussien
         kernel = np.zeros((kernel_size, kernel_size), dtype=np.float32)
         for i in range(kernel_size):
             for j in range(kernel_size):
@@ -523,9 +565,8 @@ class cAMP:
         """
         Met à jour le champ de cAMP en intégrant :
             - La production locale de cAMP par les cellules.
-              Ici, la production est répartie sur un patch de voisinage selon un noyau gaussien.
-              La production est enregistrée dans l'attribut 'camp_production' de chaque cellule pour validation.
-            - La diffusion via le Laplacien (utilisation d'un stencil 9 points).
+              La production est répartie sur un patch de voisinage selon un noyau gaussien.
+            - La diffusion via le Laplacien (stencil 9 points).
             - La dégradation du cAMP.
         
         Paramètres:
@@ -538,36 +579,35 @@ class cAMP:
                 y_idx = int(cell.position[1].item() / self.grid_resolution) % self.grid_size
                 local_signal = self.get_signal_at_position(cell.position)
                 
-                # Ici, on répartit la production sur un patch défini par prod_radius
-                # Pour production basale (cell.a0)
-                # Si vous souhaitez production inconditionnelle dès que A > af, vous pouvez enlever la condition sur local_signal
-                if local_signal > 1e-6:
-                    cell.camp_production += cell.a0  # production basale cumulée
-                    # Répartition de la production basale sur le patch selon le noyau gaussien
-                    for dx in range(-self.prod_radius, self.prod_radius + 1):
-                        for dy in range(-self.prod_radius, self.prod_radius + 1):
-                            xx = (x_idx + dx) % self.grid_size
-                            yy = (y_idx + dy) % self.grid_size
-                            weight = self.kernel[dx + self.prod_radius, dy + self.prod_radius]
-                            A_grid[xx, yy] += cell.a0 * weight
-                        
-                    # Production additionnelle si A > af
-                    if cell.A > cell.af:
-                        cell.camp_production += cell.D  # production spike cumulée
+                # Production uniquement si la cellule n'est pas latente
+                if not cell.is_latent:
+                    if local_signal > 1e-6:
+                        cell.camp_production += cell.a0  # production basale cumulée
+                        # Répartition de la production basale sur le patch
                         for dx in range(-self.prod_radius, self.prod_radius + 1):
                             for dy in range(-self.prod_radius, self.prod_radius + 1):
                                 xx = (x_idx + dx) % self.grid_size
                                 yy = (y_idx + dy) % self.grid_size
                                 weight = self.kernel[dx + self.prod_radius, dy + self.prod_radius]
-                                A_grid[xx, yy] += cell.D * weight
+                                A_grid[xx, yy] += cell.a0 * weight
+                        
+                        # Production additionnelle si A > af
+                        if cell.A > cell.af:
+                            cell.camp_production += cell.D  # production spike cumulée
+                            for dx in range(-self.prod_radius, self.prod_radius + 1):
+                                for dy in range(-self.prod_radius, self.prod_radius + 1):
+                                    xx = (x_idx + dx) % self.grid_size
+                                    yy = (y_idx + dy) % self.grid_size
+                                    weight = self.kernel[dx + self.prod_radius, dy + self.prod_radius]
+                                    A_grid[xx, yy] += cell.D * weight
         
-        # Utilisation du stencil 9-points pour la diffusion
+        # Diffusion via le stencil 9-points et dégradation
         laplacian_S = self.compute_laplacian_9point(self.signal)
         degradation_term = self.aPDE * self.signal if cells else 0.0
         self.signal += self.dt * (self.D_cAMP * laplacian_S - degradation_term + A_grid)
         self.signal = torch.clamp(self.signal, min=0)
         if torch.isnan(self.signal).any() or torch.isinf(self.signal).any():
-            print(f"NaN or Inf detected in cAMP signal at iteration corresponding to time {self.dt * iteration:.2f} min")
+            print(f"NaN or Inf detected in cAMP signal.")
             sys.exit(1)
 
     def get_signal_at_position(self, position):
@@ -610,47 +650,52 @@ INITIAL_AMPc = True       # Si True, on injecte dès le début de la simulation 
 PLOT = True               # Active l'affichage et la sauvegarde des images
 
 # Paramètres de l'espace et du temps
-SPACE_SIZE = 100  # μm  # Taille du domaine de simulation (carré)
-TIME_SIMU = 150   # min  # Durée totale de la simulation
+SPACE_SIZE = 50  # μm  # Taille du domaine de simulation (carré)
+TIME_SIMU = 1000   # min  # Durée totale de la simulation
 
 # Paramètre pour la perception du gradient par les cellules
 R_SENSING_GRAD = 5.0  # μm
 
 # =============================================================================
-# Paramètres du modèle de FitzHugh-Nagumo et de la diffusion du cAMP
+# Paramètres du modèle de FitzHugh–Nagumo et de la diffusion du cAMP
 # =============================================================================
 cell_params = {
-    'c0': 0.9,            # a.u. - Terme constant influençant l'évolution de R (stabilise les oscillations)
-    'a': 0.08,             # a.u. - Intensité du terme de stimulation dans l'équation de A (impacte l'excitabilité)
-    'gamma': 0.1,         # min⁻¹ - Facteur de couplage entre A et R (contrôle la relaxation de R)
+    'c0': 0.4,            # a.u. - Terme constant (non utilisé directement ici)
+    'a': 0.06,            # a.u. - Intensité du terme de stimulation dans l'équation de A
+    'gamma': 0.5,         # min⁻¹ - Facteur de couplage entre A et R
     'Kd': 5,              # a.u. - Constante de dissociation pour le cAMP (module la sensibilité)
-    'sigma': 0.01,         # a.u. - Amplitude du bruit aléatoire ajouté à A (fluctuations)
+    'sigma': 0.01,        # a.u. - Amplitude du bruit aléatoire ajouté à A
     'epsilon': 0.088,     # min⁻¹ - Facteur d'échelle pour la mise à jour de R
-    'D': 8.0,            # a.u. - Quantité de cAMP produite par une cellule lorsque A dépasse le seuil af
-    'a0': .1,            # a.u. - Production basale de cAMP, à utiliser pour certaines cellules
-    'af': 0, #-1.2,           # a.u. - Seuil d'activation : production additionnelle de cAMP si A dépasse ce seuil
+    'D': 300.0,            # a.u. - Quantité de cAMP produite par une cellule lorsque A dépasse le seuil af
+    'a0': 0.1,            # a.u. - Production basale de cAMP
+    'af': -2.0,            # a.u. - Seuil d'activation : production additionnelle si A dépasse ce seuil
     'noise': False,       # Désactivation du bruit dans la mise à jour de A
-    'D_cAMP': 0.1,        # μm²/min - Coefficient de diffusion du cAMP
-    'aPDE': 0.8, #1.5,          # min⁻¹ - Taux de dégradation du cAMP
+    'D_cAMP': 0.2,        # μm²/min - Coefficient de diffusion du cAMP
+    'aPDE': 0.6,          # min⁻¹ - Taux de dégradation du cAMP
     'grid_resolution': 0.5,  # μm - Taille d'une case de la grille
-    'chemotaxis_sensitivity': 0.0,  # Sensibilité des cellules au gradient de cAMP (non utilisée ici)
+    'chemotaxis_sensitivity': 0.0,  # Sensibilité des cellules au gradient de cAMP
+    # Seuil de cAMP (via L) pour sortir de l'état latent
+    'activation_threshold_cAMP': 1.0,
+    # Paramètres de la cinétique récepteur-ligand
+    'kon': 0.6,           # Constante de liaison
+    'koff': 0.2,          # Constante de dissociation
 }
 
 # =============================================================================
 # Calcul du pas de temps (DELTA_T) selon le critère CFL
 # =============================================================================
-FACTEUR_SECURITE = 0.9  # Facteur de sécurité pour garantir la stabilité numérique
+FACTEUR_SECURITE = 0.9  # Facteur de sécurité pour la stabilité numérique
 if cell_params['D_cAMP'] == 0:
-    DELTA_T = 0.001  # Valeur manuelle du pas de temps
+    DELTA_T = 0.001
 else:
     DELTA_T = FACTEUR_SECURITE * (cell_params['grid_resolution'] ** 2) / (4 * cell_params['D_cAMP'])
 print("Intervalle de temps en min : ", DELTA_T)
-PLOT_INTERVAL = int(1 / DELTA_T)  # Nombre d'itérations entre deux tracés
+PLOT_INTERVAL = int(1 / DELTA_T)  # Nombre d'itérations entre deux tracés (environ 1 minute de temps simulé)
 
 # =============================================================================
 # Paramètres pour les interactions cellulaires
 # =============================================================================
-MU = 0                   # μm/(a.u.×min) - On désactive le déplacement par force
+MU = 0                   # μm/(a.u.×min) - Déplacement par force désactivé
 F_REP = 40               # Intensité de la force répulsive
 F_ADH = 7                # Intensité de la force adhésive
 R_EQ = 1.1               # μm - Rayon d'équilibre (seuil répulsion/adhésion)
@@ -669,6 +714,7 @@ print(N_CELLS, "cells")
 
 # =============================================================================
 # Paramètres spécifiques pour deux populations de cellules
+# (Exemple : cellules statiques avec vitesse nulle)
 # =============================================================================
 velocity_magnitude_pop1 = 0
 ECART_TYPE_POP1 = 0.3
@@ -687,7 +733,7 @@ SENSITIVITY_cAMP_THRESHOLD_POP2 = 2
 pop1 = N_CELLS // 2
 pop2 = N_CELLS - pop1
 
-# Valeurs initiales modifiables pour A et R
+# Valeurs initiales pour A et R
 initial_A = 0
 initial_R = -1
 
@@ -725,23 +771,30 @@ surface = Surface()
 camp_field = cAMP(SPACE_SIZE, cell_params, initial_condition=None)
 
 if INITIAL_AMPc:
-    # Injection initiale de cAMP aux positions des cellules avec production basale
-    for cell in cells:
+    # Nombre de cellules à activer initialement
+    n_cells_to_activate = 2  # Ajustez ce nombre selon vos besoins
+    indices_a_activer = random.sample(range(len(cells)), k=n_cells_to_activate)
+    
+    # Injection initiale de cAMP uniquement aux positions des cellules sélectionnées
+    for i, cell in enumerate(cells):
         x_idx = int(cell.position[0].item() / camp_field.grid_resolution) % camp_field.grid_size
         y_idx = int(cell.position[1].item() / camp_field.grid_resolution) % camp_field.grid_size
-        camp_field.signal[x_idx, y_idx] += cell.a0
+        if i in indices_a_activer:
+            # Injecter un pic de cAMP (exemple : 5.0) pour activer la cellule
+            camp_field.signal[x_idx, y_idx] += 100.0
+        else:
+            camp_field.signal[x_idx, y_idx] += 0.0
     plot_camp_field(camp_field, space_size=SPACE_SIZE, iteration=0, vmin=0, vmax=15)
 
 # =============================================================================
 # Sauvegarde initiale si PLOT est activé
 # =============================================================================
 if PLOT:
-    PATH = f'../simulations_images/v1{0}v2{0}a{COEFF_CARRE}coefrep{COEFF_REP}fadh{F_ADH}frep{F_REP}/'
+    PATH = f'../simulations_images/latent_mode_2/'
     if not os.path.exists(PATH):
         os.makedirs(PATH)
     else:
-        print("WARNING : FOLDER ALREADY EXISTS!")
-        sys.exit(0)
+        print("WARNING : FOLDER ALREADY EXISTS! Les images vont être écrasées.")
     fig, ax = plt.subplots(figsize=(6, 6))
     plot_environment(cells, camp_field, SPACE_SIZE, axis=ax, iteration=0)
     plot_combined_state(cells, camp_field, SPACE_SIZE, 0, PATH, device)
@@ -767,7 +820,7 @@ MAX_DISTANCE = np.sqrt(2 * (SPACE_SIZE / 2) ** 2)
 
 while time < TIME_SIMU:
     if INCLUDE_CELLS:
-        # Mise à jour des états internes des cellules avec le cAMP local
+        # Mise à jour des états internes des cellules en fonction du cAMP local
         for cell in cells:
             sig_val = camp_field.get_signal_at_position(cell.position)
             cell.update_state(sig_val, DELTA_T)
@@ -782,7 +835,7 @@ while time < TIME_SIMU:
         sys.exit(1)
     
     if INCLUDE_CELLS:
-        # Mise à jour de la direction des cellules en réponse au gradient local (si applicable)
+        # Mise à jour de la direction des cellules en fonction du gradient local (si applicable)
         for cell in cells:
             local_camp = camp_field.get_signal_at_position(cell.position)
             if local_camp >= cell.sensitivity_threshold:
@@ -844,7 +897,7 @@ while time < TIME_SIMU:
         cell0_A.append(first_cell.A.item())
         cell0_R.append(first_cell.R.item())
         cell0_local.append(camp_field.get_signal_at_position(first_cell.position).item())
-        cell0_prod.append(first_cell.camp_production)  # Production cumulative enregistrée
+        cell0_prod.append(first_cell.camp_production)
     
     if PLOT and (iteration % PLOT_INTERVAL == 0):
         plot_combined_state(cells, camp_field, SPACE_SIZE, iteration, PATH, device)
@@ -873,7 +926,7 @@ ax.set_ylabel("A et R")
 ax2.set_ylabel("cAMP (local & cumulé)")
 ax.legend(loc='upper left')
 ax2.legend(loc='upper right')
-plt.title("Oscillations d'une cellule FHN et production cumulative de cAMP")
+plt.title("Oscillations d'une cellule FHN et production cumulative de cAMP (avec dynamique récepteur)")
 plt.tight_layout()
 plt.savefig("single_cell_oscillation.png", dpi=200)
 plt.show()
