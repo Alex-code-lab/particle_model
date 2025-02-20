@@ -185,6 +185,10 @@ def plot_camp_field(camp_field, space_size: float, iteration: float, vmin=0, vma
     plt.tight_layout()
     plt.close()
 
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+import matplotlib.colors as mcolors
+
 def plot_combined_state(cells, camp_field, SPACE_SIZE: float, iteration: float, PATH: str, device):
     """
     Trace une figure combinée composée de 4 sous-graphes :
@@ -212,46 +216,54 @@ def plot_combined_state(cells, camp_field, SPACE_SIZE: float, iteration: float, 
     
     # -- Axe 1 : Champ complet de cAMP --
     extent = [0, SPACE_SIZE, 0, SPACE_SIZE]
-    im1 = axes[1].imshow(camp_field.signal.cpu().numpy().T, origin='lower', extent=extent,
-                           cmap='viridis', alpha=0.8, vmin=0, vmax=100)
+    im1 = axes[1].imshow(
+        camp_field.signal.cpu().numpy().T,
+        origin='lower',
+        extent=extent,
+        cmap='viridis',
+        alpha=0.8,
+        vmin=0,     # Échelle fixée de 0...
+        vmax=15     # ... à 15 pour le cAMP
+    )
     axes[1].set_title(f'Champ de cAMP à l\'itération {iteration}')
     axes[1].set_xlabel('X (μm)')
     axes[1].set_ylabel('Y (μm)')
     fig.colorbar(im1, ax=axes[1], shrink=0.6, aspect=20, label='cAMP')
     
-    # -- Axe 2 : Concentration de A par cellule représentée par des cercles --
+    # -- Axe 2 : Concentration de A par cellule (échelle -2 à 2) --
     values_A = [cell.A.item() for cell in cells]
-    norm_A = mcolors.Normalize(vmin=min(values_A), vmax=max(values_A))
+    # On fixe l'échelle à [-2, 2], peu importe les valeurs réelles
+    norm_A = mcolors.Normalize(vmin=-2, vmax=2)
     cmap_A = plt.get_cmap('YlOrBr')
     axes[2].set_xlim(0, SPACE_SIZE)
     axes[2].set_ylim(0, SPACE_SIZE)
-    axes[2].set_aspect('equal', adjustable='box')  # Pour garder un aspect égal
+    axes[2].set_aspect('equal', adjustable='box')  # Pour garder un aspect carré
     for cell in cells:
         val = cell.A.item()
         color = cmap_A(norm_A(val))
         circle = patches.Circle(
             (cell.position[0].item(), cell.position[1].item()),
-            radius=R_EQ,
+            radius=R_EQ,  # Veillez à avoir R_EQ défini quelque part dans votre code
             facecolor=color,
             edgecolor='black',
             linewidth=0.5,
             alpha=0.8
         )
         axes[2].add_patch(circle)
-    axes[2].set_title(f'Concentration de A à l\'itération {iteration}')
+    axes[2].set_title(f'Concentration de A')
     axes[2].set_xlabel('X (μm)')
     axes[2].set_ylabel('Y (μm)')
     sm_A = plt.cm.ScalarMappable(cmap=cmap_A, norm=norm_A)
     sm_A.set_array([])
-    fig.colorbar(sm_A, ax=axes[2], shrink=0.6, aspect=20, label='A')
+    fig.colorbar(sm_A, ax=axes[2], shrink=0.6, aspect=20, label='A ([-2, 2])')
     
-    # -- Axe 3 : Concentration de R par cellule représentée par des cercles --
+    # -- Axe 3 : Concentration de R par cellule (échelle -2 à 2) --
     values_R = [cell.R.item() for cell in cells]
-    norm_R = mcolors.Normalize(vmin=min(values_R), vmax=max(values_R))
+    norm_R = mcolors.Normalize(vmin=-2, vmax=2)
     cmap_R = plt.get_cmap('YlGn')
     axes[3].set_xlim(0, SPACE_SIZE)
     axes[3].set_ylim(0, SPACE_SIZE)
-    axes[3].set_aspect('equal', adjustable='box')  # Pour garder un aspect égal
+    axes[3].set_aspect('equal', adjustable='box')
     for cell in cells:
         val = cell.R.item()
         color = cmap_R(norm_R(val))
@@ -264,12 +276,12 @@ def plot_combined_state(cells, camp_field, SPACE_SIZE: float, iteration: float, 
             alpha=0.8
         )
         axes[3].add_patch(circle)
-    axes[3].set_title(f'Concentration de R à l\'itération {iteration}')
+    axes[3].set_title(f'Concentration de R')
     axes[3].set_xlabel('X (μm)')
     axes[3].set_ylabel('Y (μm)')
     sm_R = plt.cm.ScalarMappable(cmap=cmap_R, norm=norm_R)
     sm_R.set_array([])
-    fig.colorbar(sm_R, ax=axes[3], shrink=0.6, aspect=20, label='R')
+    fig.colorbar(sm_R, ax=axes[3], shrink=0.6, aspect=20, label='R ([-2, 2])')
     
     # Sauvegarde la figure
     plt.savefig(f'{PATH}combined_{iteration}.png', bbox_inches='tight', dpi=300, pad_inches=0)
@@ -302,6 +314,145 @@ def plot_function(pas: float, Req: float, R0: float, Frep: float, Fadh: float, a
     axis.legend()
     plt.show()
 
+# =============================================================================
+# Initial state
+# =============================================================================
+def save_initial_state(cells, packing_fraction, filename):
+    """
+    Sauvegarde l'état initial de toutes les cellules dans un fichier CSV.
+
+    Pour chaque cellule, on enregistre :
+      - Les informations de base : id, population, position, vitesse.
+      - Les paramètres de configuration individuels : velocity_magnitude, persistence, tau, noise, space_size, etc.
+      - L'état interne courant : A, R, L, production cumulative de cAMP, état latent.
+      - La direction de déplacement (ses composantes x et y).
+      - Tous les paramètres contenus dans cell.cell_params (précédés de "param_").
+
+    Une ligne additionnelle est ajoutée à la fin pour stocker la valeur du packing fraction.
+
+    Paramètres:
+      cells (list): Liste d'instances de CellAgent.
+      packing_fraction (float): Valeur du packing fraction.
+      filename (str): Chemin complet du fichier CSV de sauvegarde.
+    """
+    import pandas as pd
+
+    data = []
+    for cell in cells:
+        # Construction d'un dictionnaire regroupant toutes les informations de la cellule.
+        cell_data = {
+            'id': cell.id,
+            'pop': cell.pop,
+            'x': cell.position[0].item(),
+            'y': cell.position[1].item(),
+            'vx': cell.velocity[0].item(),
+            'vy': cell.velocity[1].item(),
+            'velocity_magnitude': cell.velocity_magnitude,
+            'persistence': cell.persistence,
+            'tau': cell.tau,
+            'noise': cell.noise,
+            'space_size': cell.space_size,
+            'sensitivity_cAMP_threshold': cell.sensitivity_threshold,
+            'basal_value': cell.a0,
+            'A': cell.A.item(),
+            'R': cell.R.item(),
+            'L': cell.L.item(),
+            'camp_production': cell.camp_production,
+            'is_latent': cell.is_latent,
+            'dir_x': cell.direction[0].item(),
+            'dir_y': cell.direction[1].item()
+        }
+        # Intégration de tous les paramètres contenus dans le dictionnaire cell_params,
+        # en les préfixant par "param_" pour éviter toute confusion.
+        for key, value in cell.cell_params.items():
+            cell_data[f'param_{key}'] = value
+
+        data.append(cell_data)
+
+    # Ajout d'une ligne spéciale pour le packing fraction.
+    data.append({"packing_fraction": packing_fraction})
+
+    # Création du DataFrame et sauvegarde en CSV.
+    df = pd.DataFrame(data)
+    df.to_csv(filename, index=False)
+
+def load_initial_state(filename: str) -> tuple:
+    """
+    Charge l'état initial des cellules depuis un fichier CSV et retourne
+    à la fois la liste des objets CellAgent et la valeur du packing fraction.
+
+    Le fichier CSV doit contenir, pour chaque cellule, les colonnes :
+      - 'id', 'pop', 'x', 'y', 'vx', 'vy',
+      - 'velocity_magnitude', 'persistence', 'tau', 'noise', 'space_size',
+      - 'sensitivity_cAMP_threshold', 'basal_value',
+      - 'A', 'R', 'L', 'camp_production', 'is_latent',
+      - 'dir_x', 'dir_y'
+    ainsi que toutes les clés de cell_params, sauvegardées avec le préfixe "param_".
+    Une ligne additionnelle contenant uniquement la clé "packing_fraction" doit être présente.
+
+    Paramètres:
+        filename (str): Chemin vers le fichier CSV.
+        
+    Retourne:
+        tuple: (cells, packing_fraction)
+            - cells: liste d'objets CellAgent reconstruits.
+            - packing_fraction: valeur lue dans le CSV (ou None si non trouvée).
+    """
+    import pandas as pd
+
+    df = pd.read_csv(filename)
+
+    # Extraire la ligne correspondant au packing fraction (où 'id' est NaN)
+    pf_rows = df[df['id'].isnull()]
+    if not pf_rows.empty:
+        packing_fraction = pf_rows['packing_fraction'].iloc[0]
+        # Conserver uniquement les lignes ayant une valeur dans 'id'
+        df = df[df['id'].notnull()]
+    else:
+        packing_fraction = None
+
+    cells = []
+    # Parcourir chaque ligne pour reconstruire les cellules
+    for _, row in df.iterrows():
+        # Reconstruction de la position et de la vélocité sous forme de tenseurs Torch
+        position = torch.tensor([float(row['x']), float(row['y'])], device=device, dtype=torch.float)
+        velocity = torch.tensor([float(row['vx']), float(row['vy'])], device=device, dtype=torch.float)
+        
+        # Reconstruction du dictionnaire cell_params à partir des colonnes commençant par "param_"
+        cell_params_reconstruit = {}
+        for key in row.index:
+            if key.startswith("param_"):
+                # On enlève le préfixe "param_" pour retrouver la clé d'origine
+                cell_params_reconstruit[key[6:]] = row[key]
+        
+        # Création de la cellule en utilisant les paramètres sauvegardés
+        cell = CellAgent(
+            id=int(row['id']),
+            pop=row['pop'],
+            position=position,
+            velocity=velocity,
+            velocity_magnitude=float(row['velocity_magnitude']),
+            persistence=float(row['persistence']),
+            space_size=float(row['space_size']),
+            tau=float(row['tau']),
+            noise=float(row['noise']),
+            cell_params=cell_params_reconstruit,
+            sensitivity_cAMP_threshold=float(row['sensitivity_cAMP_threshold']),
+            basal_value=float(row['basal_value']),
+            A_init=float(row['A']),
+            R_init=float(row['R'])
+        )
+        # Restauration de l'état courant pour L, la production cumulée et l'état latent
+        cell.L = torch.tensor(float(row['L']), device=device, dtype=torch.float)
+        cell.camp_production = float(row['camp_production'])
+        cell.is_latent = bool(row['is_latent'])
+        # Reconstruction de la direction (normalisée)
+        direction = torch.tensor([float(row['dir_x']), float(row['dir_y'])], device=device, dtype=torch.float)
+        cell.direction = torch.nn.functional.normalize(direction, p=2, dim=0)
+        
+        cells.append(cell)
+    
+    return cells, packing_fraction
 # =============================================================================
 # Classes représentant les agents et le champ
 # =============================================================================
@@ -678,6 +829,78 @@ class cAMP:
         laplacian_S = (-20.0 * S + 4.0 * (S_up + S_down + S_left + S_right) +
                        2.0 * (S_upleft + S_upright + S_downleft + S_downright)) / (6.0 * dx2)
         return laplacian_S
+    
+    # def update(self, cells: list):
+    #     """
+    #     Met à jour le champ de cAMP par diffusion, dégradation et production locale.
+    #     Équation discrétisée : 
+    #         S(t+dt) = S(t) + dt * [ D_cAMP * Laplacien(S) - aPDE * S + Production ]
+
+    #     Ici, la production est rendue progressive en fonction de la fraction de
+    #     récepteurs liés (L) et éventuellement du niveau d'activateur (A).
+    #     """
+    #     # Grille où l'on va accumuler la "production" de cAMP avant de l'ajouter à self.signal.
+    #     A_grid = torch.zeros_like(self.signal)
+        
+    #     # Seuil au-delà duquel on ne produit plus (pour éviter de saturer si on le souhaite).
+    #     # Vous pouvez l'enlever ou l'ajuster librement.
+    #     production_threshold = 15.0
+        
+    #     if cells:
+    #         for cell in cells:
+    #             # Repérage de la case de grille associée à la position de la cellule
+    #             x_idx = int(cell.position[0].item() / self.grid_resolution) % self.grid_size
+    #             y_idx = int(cell.position[1].item() / self.grid_resolution) % self.grid_size
+
+    #             # cAMP local (autour de la cellule)
+    #             local_signal = self.get_signal_at_position(cell.position)
+
+    #             # Vérification : cellule non latente (déjà activée) et cAMP local < production_threshold
+    #             if not cell.is_latent and (local_signal < production_threshold):
+    #                 # EXEMPLE 1 : production proportionnelle à L, conditionnée par (A > af)
+    #                 if cell.A > cell.af:
+    #                     # Production progressive : D * L
+    #                     production_amount = cell.D * cell.L.item()
+    #                 else:
+    #                     production_amount = 0.0
+
+    #                 # (Option) Vous pouvez aussi ajouter une composante basale proportionnelle à L:
+    #                 # production_amount += cell.a0 * cell.L.item()
+    #                 #
+    #                 # Ou bien une fonction saturante :
+    #                 # production_amount = cell.D * (L / (0.2 + L))
+    #                 # etc.
+
+    #                 # Si la production n'est pas nulle, on la dépose sur la grille
+    #                 if production_amount > 0:
+    #                     # On peut également incrémenter cell.camp_production pour le suivi global
+    #                     cell.camp_production += production_amount
+                        
+    #                     # Dépôt de la production via le noyau (Gaussien ou uniforme)
+    #                     for dx in range(-self.prod_radius, self.prod_radius + 1):
+    #                         for dy in range(-self.prod_radius, self.prod_radius + 1):
+    #                             xx = (x_idx + dx) % self.grid_size
+    #                             yy = (y_idx + dy) % self.grid_size
+    #                             weight = self.kernel[dx + self.prod_radius, dy + self.prod_radius]
+    #                             A_grid[xx, yy] += production_amount * weight 
+
+    #     # --- Étape Diffusion & Dégradation ---
+    #     # Calcul du Laplacien
+    #     laplacian_S = self.compute_laplacian_9point(self.signal)
+
+    #     # Terme de dégradation
+    #     degradation_term = self.aPDE * self.signal if cells else 0.0
+
+    #     # Mise à jour de la concentration de cAMP
+    #     self.signal += self.dt * (self.D_cAMP * laplacian_S - degradation_term + A_grid)
+
+    #     # Clamp pour éviter valeurs négatives (et plantages en cas de surproduction)
+    #     self.signal = torch.clamp(self.signal, min=0.0)
+
+    #     # Sécurité : on s'assure qu'il n'y a pas de NaN / Inf
+    #     if torch.isnan(self.signal).any() or torch.isinf(self.signal).any():
+    #         print("NaN or Inf detected in cAMP signal.")
+    #         sys.exit(1)
 
     def update(self, cells: list):
         """
@@ -687,28 +910,29 @@ class cAMP:
             S(t+dt) = S(t) + dt * (D_cAMP * Laplacien - aPDE * S + Production)
         """
         A_grid = torch.zeros_like(self.signal)
+        production_threshold = 15
         if cells:
             for cell in cells:
                 x_idx = int(cell.position[0].item() / self.grid_resolution) % self.grid_size
                 y_idx = int(cell.position[1].item() / self.grid_resolution) % self.grid_size
                 local_signal = self.get_signal_at_position(cell.position)
-                if not cell.is_latent:
-                    if local_signal > 1e-6:
-                        cell.camp_production += cell.a0
+                if not cell.is_latent and local_signal > 0:
+                    cell.camp_production += cell.a0
+                    for dx in range(-self.prod_radius, self.prod_radius + 1):
+                        for dy in range(-self.prod_radius, self.prod_radius + 1):
+                            xx = (x_idx + dx) % self.grid_size
+                            yy = (y_idx + dy) % self.grid_size
+                            weight = self.kernel[dx + self.prod_radius, dy + self.prod_radius]
+                            A_grid[xx, yy] += cell.a0 * weight
+                if not cell.is_latent and local_signal < production_threshold:
+                    if cell.A > cell.af:
+                        cell.camp_production += cell.D
                         for dx in range(-self.prod_radius, self.prod_radius + 1):
                             for dy in range(-self.prod_radius, self.prod_radius + 1):
                                 xx = (x_idx + dx) % self.grid_size
                                 yy = (y_idx + dy) % self.grid_size
                                 weight = self.kernel[dx + self.prod_radius, dy + self.prod_radius]
-                                A_grid[xx, yy] += cell.a0 * weight
-                        if cell.A > cell.af:
-                            cell.camp_production += cell.D
-                            for dx in range(-self.prod_radius, self.prod_radius + 1):
-                                for dy in range(-self.prod_radius, self.prod_radius + 1):
-                                    xx = (x_idx + dx) % self.grid_size
-                                    yy = (y_idx + dy) % self.grid_size
-                                    weight = self.kernel[dx + self.prod_radius, dy + self.prod_radius]
-                                    A_grid[xx, yy] += cell.D * weight
+                                A_grid[xx, yy] += cell.D * weight #* cell.L.item()
         laplacian_S = self.compute_laplacian_9point(self.signal)
         degradation_term = self.aPDE * self.signal if cells else 0.0
         self.signal += self.dt * (self.D_cAMP * laplacian_S - degradation_term + A_grid)
@@ -735,6 +959,136 @@ class cAMP:
         y_idx = int(position[1].item() / self.grid_resolution) % self.grid_size
         return torch.tensor([grad_x[x_idx, y_idx], grad_y[x_idx, y_idx]], device=device)
 
+def create_uniform_kernel(radius: float, grid_resolution: float):
+    """
+    Crée un noyau uniforme pour distribuer le cAMP de manière homogène
+    dans un cercle de rayon donné (en μm) sur une grille de résolution grid_resolution (en μm).
+
+    Retourne:
+        kernel (torch.Tensor): Noyau uniforme de dimension (n, n) dont la somme vaut 1.
+    """
+    # Calcul du rayon en nombre de cases
+    r_cells = int(math.ceil(radius / grid_resolution))
+    size = 2 * r_cells + 1
+    kernel = np.zeros((size, size), dtype=np.float32)
+    
+    count = 0
+    for i in range(-r_cells, r_cells + 1):
+        for j in range(-r_cells, r_cells + 1):
+            # Vérifier si le point (i, j) est à l'intérieur du cercle
+            if i**2 + j**2 <= (radius / grid_resolution)**2:
+                kernel[i + r_cells, j + r_cells] = 1
+                count += 1
+    # Normalisation pour que la somme du noyau soit 1
+    kernel /= count
+    return torch.tensor(kernel, device=device)
+
+# Dans la classe cAMP, par exemple dans __init__, vous pouvez créer ce noyau uniforme :
+# class cAMP:
+#     def __init__(self, space_size: float, cell_params: dict, initial_condition=None):
+#         self.space_size = space_size
+#         self.grid_resolution = cell_params['grid_resolution']  # μm
+#         self.grid_size = int(space_size / self.grid_resolution)
+#         self.D_cAMP = cell_params['D_cAMP']    # μm²/min
+#         self.aPDE = cell_params['aPDE']          # min⁻¹
+#         self.a0 = cell_params['a0']              # Production basale (a.u.)
+#         self.dx = self.grid_resolution         # μm
+#         self.dt = DELTA_T                      # min
+#         x = torch.linspace(0, space_size, self.grid_size, device=device)
+#         y = torch.linspace(0, space_size, self.grid_size, device=device)
+#         self.X, self.Y = torch.meshgrid(x, y, indexing='ij')
+#         self.signal = torch.zeros((self.grid_size, self.grid_size), device=device)
+        
+#         # Créer un noyau uniforme pour une production sur le cercle de la cellule
+#         self.cell_radius = R_EQ  # Assurez-vous que R_EQ est défini et correspond au rayon de la cellule (en μm)
+#         self.kernel = create_uniform_kernel(self.cell_radius, self.grid_resolution)
+
+#     def compute_laplacian(self, S: torch.Tensor) -> torch.Tensor:
+#         """
+#         Calcule le Laplacien de S via un schéma 4-points avec conditions périodiques.
+#         """
+#         laplacian_S = (torch.roll(S, shifts=1, dims=0) + torch.roll(S, shifts=-1, dims=0) +
+#                        torch.roll(S, shifts=1, dims=1) + torch.roll(S, shifts=-1, dims=1) -
+#                        4 * S) / (self.dx ** 2)
+#         return laplacian_S
+
+#     def compute_laplacian_9point(self, S: torch.Tensor) -> torch.Tensor:
+#         """
+#         Calcule le Laplacien de S via un schéma 9-points (meilleure isotropie).
+#         """
+#         dx2 = self.dx ** 2
+        
+#         S_up    = torch.roll(S, shifts=+1, dims=0)
+#         S_down  = torch.roll(S, shifts=-1, dims=0)
+#         S_left  = torch.roll(S, shifts=+1, dims=1)
+#         S_right = torch.roll(S, shifts=-1, dims=1)
+        
+#         S_upleft    = torch.roll(S_up,    shifts=+1, dims=1)
+#         S_upright   = torch.roll(S_up,    shifts=-1, dims=1)
+#         S_downleft  = torch.roll(S_down,  shifts=+1, dims=1)
+#         S_downright = torch.roll(S_down,  shifts=-1, dims=1)
+        
+#         laplacian_S = (-20.0 * S + 4.0 * (S_up + S_down + S_left + S_right) +
+#                        2.0 * (S_upleft + S_upright + S_downleft + S_downright)) / (6.0 * dx2)
+#         return laplacian_S
+
+#     def update(self, cells: list):
+#         """
+#         Met à jour le champ de cAMP par diffusion, dégradation et production locale.
+
+#         Équation discrétisée :
+#             S(t+dt) = S(t) + dt * (D_cAMP * Laplacien - aPDE * S + Production)
+#         """
+#         A_grid = torch.zeros_like(self.signal)
+#         production_threshold = 15.0  # Par exemple, ne produire du cAMP que si la concentration locale < 5.0
+#         if cells:
+#             for cell in cells:
+#                 x_idx = int(cell.position[0].item() / self.grid_resolution) % self.grid_size
+#                 y_idx = int(cell.position[1].item() / self.grid_resolution) % self.grid_size
+#                 local_signal = self.get_signal_at_position(cell.position)
+
+#                 if not cell.is_latent and local_signal < production_threshold:
+#                     # Production basale uniformément dans le cercle de la cellule
+#                     for dx in range(-self.kernel.shape[0]//2, self.kernel.shape[0]//2 + 1):
+#                         for dy in range(-self.kernel.shape[1]//2, self.kernel.shape[1]//2 + 1):
+#                             xx = (x_idx + dx) % self.grid_size
+#                             yy = (y_idx + dy) % self.grid_size
+#                             weight = self.kernel[dx + self.kernel.shape[0]//2, dy + self.kernel.shape[1]//2]
+#                             A_grid[xx, yy] += cell.a0 * weight
+#                     # Production additionnelle si A dépasse un certain seuil (af)
+                    
+#                     if cell.A > cell.af:
+#                         for dx in range(-self.kernel.shape[0]//2, self.kernel.shape[0]//2 + 1):
+#                             for dy in range(-self.kernel.shape[1]//2, self.kernel.shape[1]//2 + 1):
+#                                 xx = (x_idx + dx) % self.grid_size
+#                                 yy = (y_idx + dy) % self.grid_size
+#                                 weight = self.kernel[dx + self.kernel.shape[0]//2, dy + self.kernel.shape[1]//2]
+#                                 A_grid[xx, yy] += cell.D #* weight
+#         laplacian_S = self.compute_laplacian_9point(self.signal)
+#         degradation_term = self.aPDE * self.signal if cells else 0.0
+#         self.signal += self.dt * (self.D_cAMP * laplacian_S - degradation_term + A_grid)
+#         self.signal = torch.clamp(self.signal, min=0)
+#         if torch.isnan(self.signal).any() or torch.isinf(self.signal).any():
+#             print("NaN or Inf detected in cAMP signal.")
+#             sys.exit(1)
+
+#     def get_signal_at_position(self, position: torch.Tensor) -> float:
+#         """
+#         Retourne la concentration de cAMP à une position donnée.
+#         """
+#         x_idx = int(position[0].item() / self.grid_resolution) % self.grid_size
+#         y_idx = int(position[1].item() / self.grid_resolution) % self.grid_size
+#         return self.signal[x_idx, y_idx]
+
+#     def compute_gradient_at(self, position: torch.Tensor) -> torch.Tensor:
+        # """
+        # Calcule le gradient du champ de cAMP en un point par différences centrales.
+        # """
+        # grad_x = (torch.roll(self.signal, shifts=-1, dims=0) - torch.roll(self.signal, shifts=1, dims=0)) / (2 * self.dx)
+        # grad_y = (torch.roll(self.signal, shifts=-1, dims=1) - torch.roll(self.signal, shifts=1, dims=1)) / (2 * self.dx)
+        # x_idx = int(position[0].item() / self.grid_resolution) % self.grid_size
+        # y_idx = int(position[1].item() / self.grid_resolution) % self.grid_size
+        # return torch.tensor([grad_x[x_idx, y_idx], grad_y[x_idx, y_idx]], device=device)
 # =============================================================================
 # Paramètres de simulation
 # =============================================================================
@@ -745,7 +1099,7 @@ INITIAL_AMPc = True        # Injection initiale de cAMP
 PLOT = True                # Activation de l'affichage
 
 # Domaine et temps
-SPACE_SIZE = 400           # μm, taille du domaine (carré)
+SPACE_SIZE = 200           # μm, taille du domaine (carré)
 TIME_SIMU = 100           # min, durée totale de la simulation
 
 # Paramètre de détection de gradient
@@ -774,22 +1128,22 @@ cell_params = {
     'epsilon': 0.1,  # (min⁻¹) Facteur d'échelle influençant l'évolution de R. 
                        # Généralement choisi petit pour ralentir R par rapport à A. [Plage: 0.01 à 0.1]
 
-    'D': 100,  # (a.u.) Quantité de cAMP produite lors d’un "spike" d’activation. 
+    'D': 4e4,  # (a.u.) Quantité de cAMP produite lors d’un "spike" d’activation. 
                 # Définit l'intensité de la production ponctuelle. [Plage: 10 à 50]
 
     'a0': 0,  # (a.u.) Production basale de cAMP, même en l'absence de stimulation forte. 
               # [Plage: 0 à 1]
 
-    'af': 0,  # (a.u.) Seuil d'activation de la production additionnelle de cAMP lorsque A dépasse cette valeur. 
+    'af': -1,  # (a.u.) Seuil d'activation de la production additionnelle de cAMP lorsque A dépasse cette valeur. 
               # [Plage: -1 à 1]
 
     'noise': False,  # (bool) Activation ou non du bruit stochastique dans la dynamique de A. 
                      # [Valeurs possibles: True ou False]
 
-    'D_cAMP': 10,  # (μm²/min) Coefficient de diffusion du cAMP dans le milieu. 
+    'D_cAMP': 1.0,  # (μm²/min) Coefficient de diffusion du cAMP dans le milieu. 
                     # Contrôle la propagation du cAMP. [Plage: 0.1 à 1.0]
 
-    'aPDE': 1, #0.7,  # (min⁻¹) Taux de dégradation du cAMP, simulant l’action de la phosphodiestérase (PDE). 
+    'aPDE': 0.7, #0.7,  # (min⁻¹) Taux de dégradation du cAMP, simulant l’action de la phosphodiestérase (PDE). 
                   # [Plage: 0.1 à 1.0]
 
     'grid_resolution': 1, # 0.5,  # (μm) Taille d'une case de la grille spatiale pour la diffusion du cAMP. 
@@ -798,15 +1152,15 @@ cell_params = {
     'chemotaxis_sensitivity': 0.0,  # (sans unité) Sensibilité des cellules au gradient de cAMP. 
                                     # 0 = pas de réponse, 1 = réponse maximale. [Plage: 0 à 1]
 
-    'activation_threshold_cAMP': 0,  #0.1 (sans unité) Seuil sur la fraction de récepteurs liés au cAMP (L).
+    'activation_threshold_cAMP': 0.1,  #0.1 (sans unité) Seuil sur la fraction de récepteurs liés au cAMP (L).
                                    # Tant que L < activation_threshold_cAMP, la cellule reste latente.
                                    # Lorsque L dépasse ce seuil, la cellule devient active et suit FitzHugh-Nagumo.
                                    # [Plage: 0 à 1]
                                    
-    'kon': 0.1,  # (min⁻¹) Constante de liaison du cAMP aux récepteurs, définissant la rapidité d’association. 
+    'kon': 0.5,  # (min⁻¹) Constante de liaison du cAMP aux récepteurs, définissant la rapidité d’association. 
                  # [Plage: 0.1 à 5.0]
 
-    'koff': 0.5,  # (min⁻¹) Constante de dissociation du cAMP, définissant la rapidité de libération des récepteurs. 
+    'koff': 1,  # (min⁻¹) Constante de dissociation du cAMP, définissant la rapidité de libération des récepteurs. 
                   # [Plage: 0.1 à 5.0]
 }
 
@@ -816,10 +1170,12 @@ if cell_params['D_cAMP'] == 0:
     DELTA_T = 0.001
 else:
     DELTA_T = FACTEUR_SECURITE * (cell_params['grid_resolution'] ** 2) / (4 * cell_params['D_cAMP'])
+    print("delta t serai", DELTA_T)
+DELTA_T = 0.01
 print("Intervalle de temps (min):", DELTA_T)
 PLOT_INTERVAL = int(1 / DELTA_T)
 
-cell_params['D'] = 50*DELTA_T
+cell_params['D'] = 5*cell_params['D']*DELTA_T
 
 # Paramètres d'interaction cellulaire
 MU = 0                   # μm/(a.u.×min), désactivation du déplacement par force
@@ -832,76 +1188,92 @@ COEFF_CARRE = 50         # Coefficient pour force quadratique (optionnel)
 COEFF_REP = 0.5          # Coefficient pour force répulsive
 FLUCTUATION_FACTOR = 0   # Fluctuation aléatoire
 
-# Nombre de cellules
-PACKING_FRACTION = 0.9
-# Apprioximation du nombre max de cercle dans un carré de coté SPACE_SIZE
-# N_max = SPACE_SIZE**2 / (2*np.sqrt(3)*R_EQ**2)
-N_CELLS = int((PACKING_FRACTION * SPACE_SIZE ** 2) / (math.pi * ((R_EQ) ** 2))) # Req/2???
-N_CELLS = int((SPACE_SIZE**2)/(4*np.sqrt(3)*R_EQ**2))
-# N_CELLS = 60
-print(N_CELLS, "cells")
 
-# Paramètres pour deux populations
-velocity_magnitude_pop1 = 0
-ECART_TYPE_POP1 = 0.3
-NOISE_POP_1 = 0
-TAU_POP_1 = 5 
-PERSISTENCE_POP1 = 0
-SENSITIVITY_cAMP_THRESHOLD_POP1 = 2
+initial_state = False
+if initial_state == False:
+    saving_initial_state = True
+else:
+    saving_initial_state = False
 
-velocity_magnitude_pop2 = 0
-ECART_TYPE_POP2 = 0.5
-NOISE_POP_2 = 0
-TAU_POP_2 = 5
-PERSISTENCE_POP2 = 0
-SENSITIVITY_cAMP_THRESHOLD_POP2 = 2
+if initial_state:
+    cells, PACKING_FRACTION= load_initial_state("/Users/souchaud/Desktop/initial_state.csv" )
+    N_CELLS = len(cells)
+    print(N_CELLS, "cells")
+else:   
+    # Nombre de cellules
+    PACKING_FRACTION = 0.9
+    # Apprioximation du nombre max de cercle dans un carré de coté SPACE_SIZE
+    # N_max = SPACE_SIZE**2 / (2*np.sqrt(3)*R_EQ**2)
+    N_CELLS = int((PACKING_FRACTION * SPACE_SIZE ** 2) / (math.pi * ((R_EQ) ** 2))) # Req/2???
+    N_CELLS = int((SPACE_SIZE**2)/(4*np.sqrt(3)*R_EQ**2))
+    # N_CELLS = 1
+    print(N_CELLS, "cells")
 
-pop1 = N_CELLS // 2
-pop2 = N_CELLS - pop1
+    # Paramètres pour deux populations
+    velocity_magnitude_pop1 = 0
+    ECART_TYPE_POP1 = 0.3
+    NOISE_POP_1 = 0
+    TAU_POP_1 = 5 
+    PERSISTENCE_POP1 = 0
+    SENSITIVITY_cAMP_THRESHOLD_POP1 = 2
 
-initial_A = 0
-initial_R = -1
+    velocity_magnitude_pop2 = 0
+    ECART_TYPE_POP2 = 0.5
+    NOISE_POP_2 = 0
+    TAU_POP_2 = 5
+    PERSISTENCE_POP2 = 0
+    SENSITIVITY_cAMP_THRESHOLD_POP2 = 2
 
-cell_id_counter = 0  # Identifiant unique global
+    pop1 = N_CELLS // 2
+    pop2 = N_CELLS - pop1
 
-# 1) Première population (pas d'existing_cells)
-population1 = Population(
-    num_cells=pop1,
-    space_size=SPACE_SIZE,
-    velocity_magnitude=velocity_magnitude_pop1,
-    persistence=PERSISTENCE_POP1,
-    ecart_type=ECART_TYPE_POP1,
-    min_distance=MIN_DISTANCE_INIT,
-    pop_tag="Population 1",
-    tau=TAU_POP_1,
-    noise=NOISE_POP_1,
-    cell_params=cell_params,
-    sensitivity_cAMP_threshold=SENSITIVITY_cAMP_THRESHOLD_POP1,
-    basal_fraction=0.001,
-    A_init=initial_A,
-    R_init=initial_R
-)
+    initial_A = -1
+    initial_R = -1
 
-# 2) Deuxième population (on passe la liste des cellules déjà créées)
-population2 = Population(
-    num_cells=pop2,
-    space_size=SPACE_SIZE,
-    velocity_magnitude=velocity_magnitude_pop2,
-    persistence=PERSISTENCE_POP2,
-    ecart_type=ECART_TYPE_POP2,
-    min_distance=MIN_DISTANCE_INIT,
-    pop_tag="Population 2",
-    tau=TAU_POP_2,
-    noise=NOISE_POP_2,
-    cell_params=cell_params,
-    sensitivity_cAMP_threshold=SENSITIVITY_cAMP_THRESHOLD_POP2,
-    basal_fraction=0.001,
-    A_init=initial_A,
-    R_init=initial_R,
-    existing_cells=population1.cells  # <-- On informe la Pop2 qu'il y a déjà des cellules
-)
+    cell_id_counter = 0  # Identifiant unique global
 
-cells = population1.cells + population2.cells
+    # 1) Première population (pas d'existing_cells)
+    population1 = Population(
+        num_cells=pop1,
+        space_size=SPACE_SIZE,
+        velocity_magnitude=velocity_magnitude_pop1,
+        persistence=PERSISTENCE_POP1,
+        ecart_type=ECART_TYPE_POP1,
+        min_distance=MIN_DISTANCE_INIT,
+        pop_tag="Population 1",
+        tau=TAU_POP_1,
+        noise=NOISE_POP_1,
+        cell_params=cell_params,
+        sensitivity_cAMP_threshold=SENSITIVITY_cAMP_THRESHOLD_POP1,
+        basal_fraction=0.001,
+        A_init=initial_A,
+        R_init=initial_R
+    )
+
+    # 2) Deuxième population (on passe la liste des cellules déjà créées)
+    population2 = Population(
+        num_cells=pop2,
+        space_size=SPACE_SIZE,
+        velocity_magnitude=velocity_magnitude_pop2,
+        persistence=PERSISTENCE_POP2,
+        ecart_type=ECART_TYPE_POP2,
+        min_distance=MIN_DISTANCE_INIT,
+        pop_tag="Population 2",
+        tau=TAU_POP_2,
+        noise=NOISE_POP_2,
+        cell_params=cell_params,
+        sensitivity_cAMP_threshold=SENSITIVITY_cAMP_THRESHOLD_POP2,
+        basal_fraction=0.001,
+        A_init=initial_A,
+        R_init=initial_R,
+        existing_cells=population1.cells  # <-- On informe la Pop2 qu'il y a déjà des cellules
+    )
+
+    cells = population1.cells + population2.cells
+
+    if saving_initial_state:
+        save_initial_state(cells, PACKING_FRACTION, "/Users/souchaud/Desktop/initial_state.csv")
+
 surface = Surface()
 camp_field = cAMP(SPACE_SIZE, cell_params, initial_condition=None)
 
@@ -911,7 +1283,7 @@ if INITIAL_AMPc:
         n_cells_to_activate = 20
     else:
         n_cells_to_activate = int(N_CELLS * 0.01)
-    n_cells_to_activate = 20
+    # n_cells_to_activate = 1
     print(n_cells_to_activate, "cells activated")
 
     indices_a_activer = random.sample(range(len(cells)), k=n_cells_to_activate)
@@ -919,7 +1291,7 @@ if INITIAL_AMPc:
         x_idx = int(cell.position[0].item() / camp_field.grid_resolution) % camp_field.grid_size
         y_idx = int(cell.position[1].item() / camp_field.grid_resolution) % camp_field.grid_size
         if i in indices_a_activer:
-            camp_field.signal[x_idx, y_idx] += 3.0
+            camp_field.signal[x_idx, y_idx] += cell_params['D']/10
         else:
             camp_field.signal[x_idx, y_idx] += 0.0
     plot_camp_field(camp_field, space_size=SPACE_SIZE, iteration=0, vmin=0, vmax=15)
@@ -938,53 +1310,55 @@ if PLOT:
     plt.close()
 
 # Enregistrement des paramètres de la simulation dans un fichier texte
-def save_parameters(PATH, cell_params, SPACE_SIZE, TIME_SIMU, DELTA_T, PLOT_INTERVAL, PACKING_FRACTION, N_CELLS,
-                    F_REP, F_ADH, R_EQ, R_0, MIN_DISTANCE_INIT, COEFF_CARRE, COEFF_REP,
-                    velocity_magnitude_pop1, ECART_TYPE_POP1, NOISE_POP_1, TAU_POP_1, PERSISTENCE_POP1, SENSITIVITY_cAMP_THRESHOLD_POP1,
-                    velocity_magnitude_pop2, ECART_TYPE_POP2, NOISE_POP_2, TAU_POP_2, PERSISTENCE_POP2, SENSITIVITY_cAMP_THRESHOLD_POP2):
-    parameters_file = os.path.join(PATH, "simulation_parameters.txt")
-    with open(parameters_file, "w") as f:
-        f.write("Paramètres de la simulation :\n")
-        f.write(f"SPACE_SIZE = {SPACE_SIZE} μm\n")
-        f.write(f"TIME_SIMU = {TIME_SIMU} min\n")
-        f.write(f"DELTA_T = {DELTA_T} min\n")
-        f.write(f"PLOT_INTERVAL = {PLOT_INTERVAL}\n")
-        f.write(f"PACKING_FRACTION = {PACKING_FRACTION}\n")
-        f.write(f"N_CELLS = {N_CELLS}\n\n")
-        
-        f.write("Paramètres d'interaction cellulaire :\n")
-        f.write(f"F_REP = {F_REP}\n")
-        f.write(f"F_ADH = {F_ADH}\n")
-        f.write(f"R_EQ = {R_EQ}\n")
-        f.write(f"R_0 = {R_0}\n")
-        f.write(f"MIN_DISTANCE_INIT = {MIN_DISTANCE_INIT}\n")
-        f.write(f"COEFF_CARRE = {COEFF_CARRE}\n")
-        f.write(f"COEFF_REP = {COEFF_REP}\n\n")
-        
-        f.write("Paramètres des cellules de la population 1 :\n")
-        f.write(f"velocity_magnitude_pop1 = {velocity_magnitude_pop1}\n")
-        f.write(f"ECART_TYPE_POP1 = {ECART_TYPE_POP1}\n")
-        f.write(f"NOISE_POP_1 = {NOISE_POP_1}\n")
-        f.write(f"TAU_POP_1 = {TAU_POP_1}\n")
-        f.write(f"PERSISTENCE_POP1 = {PERSISTENCE_POP1}\n")
-        f.write(f"SENSITIVITY_cAMP_THRESHOLD_POP1 = {SENSITIVITY_cAMP_THRESHOLD_POP1}\n\n")
-        
-        
-        f.write("Paramètres des cellules de la population 2 :\n")
-        f.write(f"velocity_magnitude_pop1 = {velocity_magnitude_pop2}\n")
-        f.write(f"ECART_TYPE_POP1 = {ECART_TYPE_POP2}\n")
-        f.write(f"NOISE_POP_1 = {NOISE_POP_2}\n")
-        f.write(f"TAU_POP_1 = {TAU_POP_2}\n")
-        f.write(f"PERSISTENCE_POP1 = {PERSISTENCE_POP2}\n")
-        f.write(f"SENSITIVITY_cAMP_THRESHOLD_POP1 = {SENSITIVITY_cAMP_THRESHOLD_POP2}\n\n")
 
-        f.write("Paramètres du modèle FHN (cell_params) :\n")
-        for key, value in cell_params.items():
-            f.write(f"{key} : {value}\n")
+if save_initial_state ==False:
+    def save_parameters(PATH, cell_params, SPACE_SIZE, TIME_SIMU, DELTA_T, PLOT_INTERVAL, PACKING_FRACTION, N_CELLS,
+                        F_REP, F_ADH, R_EQ, R_0, MIN_DISTANCE_INIT, COEFF_CARRE, COEFF_REP,
+                        velocity_magnitude_pop1, ECART_TYPE_POP1, NOISE_POP_1, TAU_POP_1, PERSISTENCE_POP1, SENSITIVITY_cAMP_THRESHOLD_POP1,
+                        velocity_magnitude_pop2, ECART_TYPE_POP2, NOISE_POP_2, TAU_POP_2, PERSISTENCE_POP2, SENSITIVITY_cAMP_THRESHOLD_POP2):
+        parameters_file = os.path.join(PATH, "simulation_parameters.txt")
+        with open(parameters_file, "w") as f:
+            f.write("Paramètres de la simulation :\n")
+            f.write(f"SPACE_SIZE = {SPACE_SIZE} μm\n")
+            f.write(f"TIME_SIMU = {TIME_SIMU} min\n")
+            f.write(f"DELTA_T = {DELTA_T} min\n")
+            f.write(f"PLOT_INTERVAL = {PLOT_INTERVAL}\n")
+            f.write(f"PACKING_FRACTION = {PACKING_FRACTION}\n")
+            f.write(f"N_CELLS = {N_CELLS}\n\n")
+            
+            f.write("Paramètres d'interaction cellulaire :\n")
+            f.write(f"F_REP = {F_REP}\n")
+            f.write(f"F_ADH = {F_ADH}\n")
+            f.write(f"R_EQ = {R_EQ}\n")
+            f.write(f"R_0 = {R_0}\n")
+            f.write(f"MIN_DISTANCE_INIT = {MIN_DISTANCE_INIT}\n")
+            f.write(f"COEFF_CARRE = {COEFF_CARRE}\n")
+            f.write(f"COEFF_REP = {COEFF_REP}\n\n")
+            
+            f.write("Paramètres des cellules de la population 1 :\n")
+            f.write(f"velocity_magnitude_pop1 = {velocity_magnitude_pop1}\n")
+            f.write(f"ECART_TYPE_POP1 = {ECART_TYPE_POP1}\n")
+            f.write(f"NOISE_POP_1 = {NOISE_POP_1}\n")
+            f.write(f"TAU_POP_1 = {TAU_POP_1}\n")
+            f.write(f"PERSISTENCE_POP1 = {PERSISTENCE_POP1}\n")
+            f.write(f"SENSITIVITY_cAMP_THRESHOLD_POP1 = {SENSITIVITY_cAMP_THRESHOLD_POP1}\n\n")
+            
+            
+            f.write("Paramètres des cellules de la population 2 :\n")
+            f.write(f"velocity_magnitude_pop1 = {velocity_magnitude_pop2}\n")
+            f.write(f"ECART_TYPE_POP1 = {ECART_TYPE_POP2}\n")
+            f.write(f"NOISE_POP_1 = {NOISE_POP_2}\n")
+            f.write(f"TAU_POP_1 = {TAU_POP_2}\n")
+            f.write(f"PERSISTENCE_POP1 = {PERSISTENCE_POP2}\n")
+            f.write(f"SENSITIVITY_cAMP_THRESHOLD_POP1 = {SENSITIVITY_cAMP_THRESHOLD_POP2}\n\n")
 
-        print("Paramètres enregistrés dans le fichier :", parameters_file)
+            f.write("Paramètres du modèle FHN (cell_params) :\n")
+            for key, value in cell_params.items():
+                f.write(f"{key} : {value}\n")
 
-save_parameters(PATH, cell_params, SPACE_SIZE, TIME_SIMU, DELTA_T, PLOT_INTERVAL, PACKING_FRACTION, N_CELLS,
+            print("Paramètres enregistrés dans le fichier :", parameters_file)
+
+    save_parameters(PATH, cell_params, SPACE_SIZE, TIME_SIMU, DELTA_T, PLOT_INTERVAL, PACKING_FRACTION, N_CELLS,
                 F_REP, F_ADH, R_EQ, R_0, MIN_DISTANCE_INIT, COEFF_CARRE, COEFF_REP,
                 velocity_magnitude_pop1, ECART_TYPE_POP1, NOISE_POP_1, TAU_POP_1, PERSISTENCE_POP1, SENSITIVITY_cAMP_THRESHOLD_POP1,
                 velocity_magnitude_pop2, ECART_TYPE_POP2, NOISE_POP_2, TAU_POP_2, PERSISTENCE_POP2, SENSITIVITY_cAMP_THRESHOLD_POP2)
