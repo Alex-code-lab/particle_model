@@ -3,11 +3,12 @@
 """
 Modèle complet du système de cAMP/PDE inspiré du modèle Martiel & Goldbeter.
 - Les cellules produisent du cAMP de manière basale.
-- Si la concentration locale de cAMP dépasse un seuil (production_threshold), la production est augmentée par rétroaction positive.
+- Si la concentration locale de cAMP dépasse un seuil (production_threshold), la production est augmentée (rétroaction positive).
 - Si la concentration locale de PDE dépasse production_inhibition_threshold, la production de cAMP est bloquée.
 - La dégradation du cAMP est couplée localement à la concentration de PDE (via k_PDE).
 - Les champs de cAMP et de PDE diffusent avec des conditions aux bords périodiques.
 - Les cellules restent immobiles pour simplifier le système.
+- Un tracé final affiche, pour une cellule donnée, l'évolution temporelle de sa concentration locale et de sa production de cAMP et de PDE.
 Auteur : souchaud
 """
 
@@ -21,6 +22,10 @@ import numpy as np
 # Configuration de l'appareil (GPU si disponible)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Device for torch operations:", device)
+
+############################
+# Fonctions de tracé global
+############################
 
 def plot_environment(cells, space_size, req, path_saving, iteration):
     """
@@ -52,14 +57,6 @@ def plot_combined_state(cells, camp_field, pde_field, SPACE_SIZE: float, iterati
       1) Positions des cellules.
       2) Champ de cAMP.
       3) Champ de PDE.
-    
-    Paramètres:
-      - cells : Liste des instances CellAgent.
-      - camp_field : Instance de la classe cAMP (utilise camp_field.camp_grid).
-      - pde_field : Instance de la classe PDE (utilise pde_field.PDE_grid).
-      - SPACE_SIZE (float) : Taille du domaine (en μm).
-      - iteration (float) : Itération (pour le titre).
-      - PATH (str) : Chemin de sauvegarde de l'image.
     """
     fig, axes = plt.subplots(1, 3, figsize=(20, 5), constrained_layout=True)
     extent = [0, SPACE_SIZE, 0, SPACE_SIZE]
@@ -83,7 +80,7 @@ def plot_combined_state(cells, camp_field, pde_field, SPACE_SIZE: float, iterati
         extent=extent,
         cmap='viridis',
         alpha=0.8,
-        vmin=0, vmax=2
+        vmin=0, vmax=1.5
     )
     axes[1].set_title(f"Champ de cAMP (itération {iteration})")
     axes[1].set_xlabel("X (μm)")
@@ -97,7 +94,7 @@ def plot_combined_state(cells, camp_field, pde_field, SPACE_SIZE: float, iterati
         extent=extent,
         cmap='plasma',
         alpha=0.8,
-        vmin=0, vmax=0.5
+        vmin=0, vmax=0.6
     )
     axes[2].set_title(f"Champ de PDE (itération {iteration})")
     axes[2].set_xlabel("X (μm)")
@@ -108,12 +105,100 @@ def plot_combined_state(cells, camp_field, pde_field, SPACE_SIZE: float, iterati
     plt.savefig(filename, bbox_inches='tight', dpi=300, pad_inches=0)
     plt.close()
 
+###########################
+# Fonction de tracé ciblé
+###########################
+
+def plot_cell_time_series_four(data_frame, cell_id, path):
+    """
+    Pour une cellule donnée (cell_id), trace l'évolution temporelle sous forme de 4 graphiques distincts :
+      1) Concentration locale de cAMP.
+      2) Concentration locale de PDE.
+      3) Production de cAMP.
+      4) Production de PDE.
+    Chaque graphique a sa propre échelle.
+    """
+    cell_data = data_frame[data_frame['cell_id'] == cell_id].copy()
+    cell_data.sort_values('time', inplace=True)
+    
+    fig, axs = plt.subplots(2, 2, figsize=(12, 10))
+    
+    # 1) Concentration locale de cAMP
+    axs[0, 0].plot(cell_data['time'], cell_data['local_cAMP'], color='blue')
+    axs[0, 0].set_title('Concentration locale de cAMP')
+    axs[0, 0].set_xlabel('Temps (min)')
+    axs[0, 0].set_ylabel('cAMP')
+    axs[0, 0].grid(True)
+    
+    # 2) Concentration locale de PDE
+    axs[0, 1].plot(cell_data['time'], cell_data['local_PDE'], color='red')
+    axs[0, 1].set_title('Concentration locale de PDE')
+    axs[0, 1].set_xlabel('Temps (min)')
+    axs[0, 1].set_ylabel('PDE')
+    axs[0, 1].grid(True)
+    
+    # 3) Production de cAMP
+    axs[1, 0].plot(cell_data['time'], cell_data['cAMP_prod'], color='cyan', linestyle='--')
+    axs[1, 0].set_title('Production de cAMP')
+    axs[1, 0].set_xlabel('Temps (min)')
+    axs[1, 0].set_ylabel('Production cAMP')
+    axs[1, 0].grid(True)
+    
+    # 4) Production de PDE
+    axs[1, 1].plot(cell_data['time'], cell_data['PDE_prod'], color='magenta', linestyle='--')
+    axs[1, 1].set_title('Production de PDE')
+    axs[1, 1].set_xlabel('Temps (min)')
+    axs[1, 1].set_ylabel('Production PDE')
+    axs[1, 1].grid(True)
+    
+    fig.suptitle(f"Évolution temporelle pour la cellule {cell_id}", fontsize=16)
+    fig.tight_layout(rect=[0, 0.03, 1, 0.95])
+    fig.savefig( path +"yes.png", bbox_inches='tight', dpi=300, pad_inches=0)
+
+    plt.show()
+    plt.close()
+
+
+def plot_cell_time_series(data_frame, cell_id):
+    """
+    Pour une cellule donnée (cell_id), trace l'évolution temporelle de :
+      - La concentration locale de cAMP.
+      - La concentration locale de PDE.
+      - La production de cAMP.
+      - La production de PDE.
+    Ces données sont supposées être enregistrées dans data_frame.
+    """
+    cell_data = data_frame[data_frame['cell_id'] == cell_id].copy()
+    cell_data.sort_values('time', inplace=True)
+    
+    plt.figure(figsize=(12, 6))
+    
+    # Tracer la concentration locale de cAMP
+    plt.plot(cell_data['time'], cell_data['local_cAMP'], label='Concentration locale de cAMP', color='blue')
+    # Tracer la concentration locale de PDE (si enregistrée)
+    plt.plot(cell_data['time'], cell_data['local_PDE'], label='Concentration locale de PDE', color='red')
+    # Tracer la production de cAMP
+    plt.plot(cell_data['time'], cell_data['cAMP_prod'], label='Production de cAMP', color='cyan', linestyle='--')
+    # Tracer la production de PDE
+    plt.plot(cell_data['time'], cell_data['PDE_prod'], label='Production de PDE', color='magenta', linestyle='--')
+    
+    plt.xlabel('Temps (min)')
+    plt.ylabel('Valeur (unités arbitraires)')
+    plt.title(f'Évolution temporelle pour la cellule {cell_id}')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+##############################
+# Fonctions internes du modèle
+##############################
+
 def update_cell_MG(cell, local_cAMP, dt):
     """
-    Met à jour l'état interne d'une cellule selon une version simplifiée
-    du modèle Martiel & Goldbeter.
+    Met à jour l'état interne d'une cellule selon une version simplifiée du modèle Martiel & Goldbeter.
     """
-    # Exemple de fonction d'activation de Hill
+    # Exemple d'une fonction d'activation de Hill
     F = (cell.r_T * local_cAMP) / (1 + local_cAMP)
     db = cell.qs * F - cell.kt * cell.b
     dr_T = -cell.f1 * local_cAMP * cell.r_T + cell.f2 * (1 - cell.r_T)
@@ -131,17 +216,16 @@ class CellAgent:
         # Variables internes du modèle Martiel & Goldbeter
         self.b = 0.0    # concentration d'AMPc intracellulaire
         self.r_T = 0.1  # fraction de récepteurs activés
-        # Paramètres du modèle interne
+        # Paramètres internes
         self.qs = 1.0   # taux de production d'AMPc intracellulaire
         self.kt = 0.1   # taux de dégradation d'AMPc intracellulaire
         self.f1 = 0.5   # facteur de désactivation des récepteurs
         self.f2 = 0.5   # facteur de réactivation des récepteurs
         # Paramètres pour la production de PDE
-        self.PDE_threshold = 1.0  # seuil de cAMP (en nM) pour déclencher la production de PDE
-        self.PDE_rate = 18       # taux de production de PDE
-        self.PDE = 0.0            # quantité de PDE produite par la cellule
-        # Dans ce modèle, la cellule ne produit pas d'AMPc (via ses ODE internes)
-        # Si la PDE est élevée, la cellule cessera de produire du cAMP au niveau global.
+        self.PDE_threshold = 0.8  # seuil de cAMP pour déclencher la production de PDE
+        self.PDE_rate = 2.9        # taux de production de PDE
+        self.PDE = 0.0            # quantité de PDE produite par la cellule (initialement 0)
+        # Paramètres pour éventuel bruit (non utilisé ici)
         self.tau = tau
         self.noise = noise
 
@@ -162,10 +246,10 @@ class Population:
 
 class cAMP:
     def __init__(self, space_size, grid_resolution, rho, alpha0, D, J,
-                 production_threshold=1.0, extra_production_rate=0.05,
+                 production_threshold=0.3, extra_production_rate=0.05,
                  k_PDE=1.0, production_inhibition_threshold=0.1):
         """
-        Paramètres:
+        Paramètres :
           - space_size : taille du domaine (μm)
           - grid_resolution : taille d'une case de la grille (μm)
           - rho : coefficient de production basale de cAMP par cellule
@@ -173,7 +257,7 @@ class cAMP:
           - D : coefficient de diffusion du cAMP (μm²/min)
           - J : taux de dégradation global du cAMP (min⁻¹)
           - production_threshold : seuil de cAMP pour rétroaction positive
-          - extra_production_rate : production additionnelle lorsque le seuil est dépassé
+          - extra_production_rate : production additionnelle si le seuil est dépassé
           - k_PDE : coefficient augmentant la dégradation du cAMP en fonction de la PDE locale
           - production_inhibition_threshold : si la concentration locale de PDE dépasse ce seuil, la production de cAMP est bloquée
         """
@@ -197,20 +281,18 @@ class cAMP:
             y_idx = int(cell.position[1].item() / self.grid_resolution)
             x_idx = min(x_idx, self.grid_size - 1)
             y_idx = min(y_idx, self.grid_size - 1)
-            # Lire la concentration locale actuelle de cAMP
+            # Lire la concentration locale actuelle de cAMP et de PDE
             local_conc = self.camp_grid[x_idx, y_idx].item()
-            # Lire la concentration locale de PDE
             local_PDE = pde_field.PDE_grid[x_idx, y_idx].item()
-            # Si la concentration de PDE dépasse le seuil d'inhibition, bloquer la production de cAMP
+            # Calcul de la production de cAMP pour ce pas de temps :
             if local_PDE > self.production_inhibition_threshold:
                 prod = 0.0
             else:
-                # Production basale
                 prod = self.rho * self.alpha0 * dt
-                # Rétroaction positive : si cAMP > production_threshold, production additionnelle
                 if local_conc > self.production_threshold:
                     prod += self.extra_production_rate * dt
             self.camp_grid[x_idx, y_idx] += prod
+            # On pourrait enregistrer cette production si nécessaire (voir ci-dessous)
         # Diffusion avec conditions périodiques
         self.camp_grid += self.D * self.laplacian(self.camp_grid) * dt
         # Dégradation du cAMP, renforcée localement par la PDE
@@ -227,7 +309,7 @@ class cAMP:
 class PDE:
     def __init__(self, space_size, grid_resolution, D, decay):
         """
-        Paramètres:
+        Paramètres :
           - space_size : taille du domaine (μm)
           - grid_resolution : taille d'une case de la grille (μm)
           - D : coefficient de diffusion de la PDE (μm²/min)
@@ -260,14 +342,18 @@ class PDE:
                 torch.roll(grid, shifts=-1, dims=1) -
                 4 * grid)
 
+#####################
+# Simulation globale
+#####################
+
 def main():
     # =======================
     # Paramètres de simulation
     # =======================
     SPACE_SIZE = 100        # en micromètres
-    TIME_SIMU = 500         # durée de la simulation en minutes
+    TIME_SIMU = 100         # durée de la simulation en minutes
     DELTA_T = 0.01          # intervalle de temps (minutes)
-    PLOT_INTERVAL = 100     # intervalle pour tracer l'environnement
+    PLOT_INTERVAL = 1000     # intervalle pour tracer l'environnement
 
     # Nombre de cellules
     N_CELLS = 600
@@ -280,11 +366,23 @@ def main():
     NOISE_POP_2 = 5
 
     # Création des populations (cellules immobiles)
-    pop1 = Population(num_cells=int(N_CELLS/2), space_size=SPACE_SIZE,
-                      pop_tag="Population 1", tau=TAU_POP_1, noise=NOISE_POP_1)
-    pop2 = Population(num_cells=int(N_CELLS/2), space_size=SPACE_SIZE,
-                      pop_tag="Population 2", tau=TAU_POP_2, noise=NOISE_POP_2)
-    
+    # Instanciation de la Population 1
+    pop1 = Population(
+        num_cells=int(N_CELLS/2),        # Nombre de cellules dans cette population (ici la moitié du total)
+        space_size=SPACE_SIZE,           # Taille du domaine de simulation en micromètres
+        pop_tag="Population 1",          # Identifiant ou étiquette de cette population (peut être utilisé pour différencier des populations)
+        tau=TAU_POP_1,                   # Paramètre tau pour les cellules (influence la persistance du mouvement ou la dynamique interne)
+        noise=NOISE_POP_1                # Niveau de bruit associé aux cellules (détermine la variabilité comportementale)
+    )
+
+    # Instanciation de la Population 2
+    pop2 = Population(
+        num_cells=int(N_CELLS/2),        # Nombre de cellules dans cette population
+        space_size=SPACE_SIZE,           # Taille du domaine de simulation (en μm)
+        pop_tag="Population 2",          # Identifiant ou étiquette pour différencier cette population de la première
+        tau=TAU_POP_2,                   # Paramètre tau spécifique à cette population (peut différer pour influencer la persistance ou la réactivité)
+        noise=NOISE_POP_2                # Niveau de bruit pour les cellules de cette population
+    )
     cells = pop1.cells + pop2.cells
 
     # Préparation du dossier de sauvegarde
@@ -294,14 +392,35 @@ def main():
     else:
         print("WARNING: Le dossier existe déjà!")
     
-    # Création des champs de cAMP et de PDE
-    camp = cAMP(space_size=SPACE_SIZE, grid_resolution=1,
-                rho=0.5, alpha0=1.0, D=1.0, J=0.01,
-                production_threshold=0.2, extra_production_rate=0.05,
-                k_PDE=2.0, production_inhibition_threshold=0.1)
-    pde_field = PDE(space_size=SPACE_SIZE, grid_resolution=1,
-                    D=0.05, decay=0.01)
+    # # Création des champs de cAMP et de PDE
+    # camp = cAMP(space_size=SPACE_SIZE, grid_resolution=1,
+    #             rho=0.5, alpha0=1.0, D=1.0, J=0.01,
+    #             production_threshold=0.2, extra_production_rate=0.05,
+    #             k_PDE=2.0, production_inhibition_threshold=0.1)
+    # pde_field = PDE(space_size=SPACE_SIZE, grid_resolution=1,
+    #                 D=0.2, decay=0.01)
     
+        # Création du champ de cAMP avec rétroaction positive et inhibition par PDE
+    camp = cAMP(
+        space_size= SPACE_SIZE,                   # Taille totale du domaine simulé (en μm)
+        grid_resolution=1,                       # Taille d'une case de la grille (en μm)
+        rho=0.5,                                 # Coefficient de production basale de cAMP par cellule
+        alpha0=1.0,                              # Facteur de normalisation appliqué à la production basale
+        D=1.0,                                   # Coefficient de diffusion du cAMP (en μm²/min)
+        J=0.01,                                  # Taux de dégradation globale du cAMP (min⁻¹)
+        production_threshold=0.2,                # Seuil de concentration de cAMP (en unité arbitraire) pour activer la rétroaction positive (production additionnelle)
+        extra_production_rate=0.05,                # Production additionnelle de cAMP (en unité/min) si le seuil est dépassé
+        k_PDE=2.0,                               # Coefficient qui augmente la dégradation du cAMP en fonction de la concentration locale de PDE (min⁻¹)
+        production_inhibition_threshold=0.1      # Seuil de concentration locale de PDE (en unité arbitraire) au-dessus duquel la production de cAMP est bloquée
+    )
+
+    # Création du champ de PDE
+    pde_field = PDE(
+        space_size=SPACE_SIZE,                   # Taille totale du domaine simulé (en μm)
+        grid_resolution=1,                       # Taille d'une case de la grille (en μm)
+        D=0.2,                                   # Coefficient de diffusion de la PDE (en μm²/min)
+        decay=0.01                               # Taux de dégradation de la PDE (min⁻¹)
+    )
     # Sauvegarde de l'état initial
     plot_environment(cells, space_size=SPACE_SIZE, req=1.1, path_saving=PATH, iteration=0)
 
@@ -309,56 +428,74 @@ def main():
     iteration = 1
     data_list = []
     
+    # Simulation : enregistrez pour chaque pas de temps, pour chaque cellule,
+    # la concentration locale de cAMP, celle de PDE, et la production de cAMP et PDE.
     while time < TIME_SIMU:
-        # Pour chaque cellule, récupérer la concentration locale de cAMP
         for cell in cells:
             x_idx = int(cell.position[0].item() / camp.grid_resolution)
             y_idx = int(cell.position[1].item() / camp.grid_resolution)
             x_idx = min(x_idx, camp.grid_size - 1)
             y_idx = min(y_idx, camp.grid_size - 1)
-            local_cAMP = camp.camp_grid[x_idx, y_idx].item()
             
-            # Mise à jour du modèle interne de la cellule (Martiel & Goldbeter)
+            local_cAMP = camp.camp_grid[x_idx, y_idx].item()
+            local_PDE = pde_field.PDE_grid[x_idx, y_idx].item()
+            
+            # Mise à jour du modèle interne de la cellule
             update_cell_MG(cell, local_cAMP, DELTA_T)
             
-            # Production de PDE : si cAMP dépasse le seuil, la cellule produit PDE;
-            # sinon, la production de PDE est nulle.
+            # Production de PDE par la cellule
             if local_cAMP > cell.PDE_threshold:
                 cell.PDE = cell.PDE_rate
             else:
                 cell.PDE = 0.0
             
-            # Enregistrement des données
+            # Calcul de la production de cAMP pour cette cellule (logique identique à celle dans camp.update)
+            if local_PDE > camp.production_inhibition_threshold:
+                cAMP_prod = 0.0
+            else:
+                cAMP_prod = camp.rho * camp.alpha0 * DELTA_T
+                if local_cAMP > camp.production_threshold:
+                    cAMP_prod += camp.extra_production_rate * DELTA_T
+            
+            # La production de PDE pour cette cellule
+            PDE_prod = cell.PDE * DELTA_T
+            
+            # Enregistrement des données pour cette cellule à ce pas de temps
             data_list.append({
                 'time': time,
                 'cell_id': cell.id,
                 'pop_tag': cell.pop,
                 'x': cell.position[0].item(),
                 'y': cell.position[1].item(),
-                'b': cell.b,
-                'r_T': cell.r_T,
                 'local_cAMP': local_cAMP,
-                'PDE': cell.PDE
+                'local_PDE': local_PDE,
+                'cAMP_prod': cAMP_prod,
+                'PDE_prod': PDE_prod,
+                'b': cell.b,
+                'r_T': cell.r_T
             })
         
-        # Mise à jour des champs : on met à jour d'abord le champ de PDE, puis celui de cAMP
+        # Mise à jour des champs : d'abord le champ de PDE, puis celui de cAMP
         pde_field.update(cells, DELTA_T)
         camp.update(cells, pde_field, DELTA_T)
         
         time += DELTA_T
         iteration += 1
         
-        # Traçage périodique
         if iteration % PLOT_INTERVAL == 0:
             plot_combined_state(cells, camp, pde_field, SPACE_SIZE, iteration, PATH)
         
         if iteration % 1000 == 0:
             print(f"Temps simulé : {time:.2f} minutes")
     
-    # Sauvegarde des résultats
+    # Sauvegarde des données dans un CSV
     data_frame = pd.DataFrame(data_list)
-    data_frame.to_csv(os.path.join(PATH, "simulation_data.csv"), index=False)
+    csv_filename = os.path.join(PATH, "simulation_data.csv")
+    data_frame.to_csv(csv_filename, index=False)
     print("Simulation terminée. Données sauvegardées.")
+    
+    # Tracé des séries temporelles pour une cellule donnée (par exemple, cell_id = 0)
+    plot_cell_time_series_four(data_frame, cell_id=0, path=PATH)
 
 if __name__ == "__main__":
     main()
