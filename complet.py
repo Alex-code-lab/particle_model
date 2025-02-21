@@ -44,7 +44,7 @@ else:
 print(f"📁 Dossier de simulation créé : {PATH}")
 # Espace / Temps
 # ------------------
-SPACE_SIZE = 100.0    # taille du domaine de la simulation (microns)
+SPACE_SIZE = 250.0    # taille du domaine de la simulation (microns)
 TIME_SIMU = 500.0       # durée de la simulation (minutes)
 PLOT_INTERVAL = 10     # fréquence de traçage/sauvegarde
 
@@ -54,8 +54,8 @@ PLOT_INTERVAL = 10     # fréquence de traçage/sauvegarde
 MU = 1.0               # coefficient de "mobilité" (prémultiplicateur des forces)
 F_REP = 40.0           # force répulsive maximale
 F_ADH = 7.0            # force adhésive maximale
-R_EQ = 4 # 1.1             # distance d'équilibre
-R_0 = 5.8 #1.6              # distance maximale d'interaction
+R_EQ = 2 # 1.1             # distance d'équilibre
+R_0 = 3.8 #1.6              # distance maximale d'interaction
 COEFF_CARRE = 50.0     # paramètre pour la force d'adhésion "modifiée"
 COEFF_REP = 0.5        # coefficient pour la répulsion
 FLUCTUATION_FACTOR = 3 # fluctuation aléatoire sur la vitesse
@@ -64,9 +64,9 @@ FLUCTUATION_FACTOR = 3 # fluctuation aléatoire sur la vitesse
 # Paramètres "biochimiques" (cAMP / PDE)
 # ------------------
 GRID_RESOLUTION = 1.0     # taille d'une case en microns
-D_CAMP = 1.0              # Diffusion du cAMP (µm²/min)
-D_PDE = 1.0               # Diffusion de la PDE (µm²/min)
-PDE_threshold = 0.2       # Seuil cAMP pour production PDE
+D_CAMP = 1.0*3              # Diffusion du cAMP (µm²/min)
+D_PDE = 1.0*3              # Diffusion de la PDE (µm²/min)
+PDE_threshold = 0.150 # 0.2       # Seuil cAMP pour production PDE
 PDE_rate = 2000.0         # Facteur de production PDE
 PDE_decay = 0.1           # Dégradation basique PDE (min^-1)
 rho = 0.05                # Production basale de cAMP
@@ -88,12 +88,12 @@ hill_K_h = 0.1    # constante demi-sat. pour boucle de rétroaction
 # ------------------
 # Paramètres population
 # ------------------
-PACKING_FRACTION = 0.01  # Fraction d'occupation de l'espace
+PACKING_FRACTION = 0.8  # Fraction d'occupation de l'espace
 # ATTENTION : adapter PACKING_FRACTION à SPACE_SIZE et R_EQ
 # On calcule le nombre de cellules sur la base de la fraction d'occupation
 estimated_cell_area = math.pi * (R_EQ)**2
-N_CELLS = int((PACKING_FRACTION * SPACE_SIZE**2) / estimated_cell_area)
-N_CELLS = 3
+N_CELLS = int(PACKING_FRACTION * 0.9 * (SPACE_SIZE**2) / estimated_cell_area)
+N_CELLS = 2800
 print(f"Nombre de cellules estimé = {N_CELLS}")
 
 # ------------------
@@ -111,7 +111,7 @@ DELTA_T = min(DELTA_T, 0.05)          # pas de temps (minutes)
 # Paramètres pour deux populations
 # ----------------
 # Paramètres pour Population 1
-velocity_magnitude_pop1 = 1         # Vitesse moyenne (μm/min) pour Pop 1
+velocity_magnitude_pop1 = 0.3         # Vitesse moyenne (μm/min) pour Pop 1
 ECART_TYPE_POP1 = 0.3                # Dispersion autour de la vitesse moyenne
 NOISE_POP_1 = 2                      # Intensité du bruit directionnel
 TAU_POP_1 = 5                        # Temps de persistance (min)
@@ -119,7 +119,7 @@ PERSISTENCE_POP1 = 0                 # Pas de persistance (0 = aucune)
 SENSITIVITY_cAMP_THRESHOLD_POP1 = 2  # Seuil de détection du cAMP
 
 # Paramètres pour Population 2
-velocity_magnitude_pop2 = 2         # Vitesse moyenne (μm/min) pour Pop 2
+velocity_magnitude_pop2 = 0.6         # Vitesse moyenne (μm/min) pour Pop 2
 ECART_TYPE_POP2 = 0.5                # Dispersion de la vitesse
 NOISE_POP_2 = 2                      # Intensité du bruit directionnel
 TAU_POP_2 = 5                        # Temps de persistance (min)
@@ -455,7 +455,7 @@ def plot_cells_and_fields(cells, camp_grid, pde_grid, iteration, time_now,
     ax2.set_aspect('equal', adjustable='box')  # Assure une échelle identique en x et y
     PDE_img = ax2.imshow(
         pde_grid.T, origin='lower', extent=extent,
-        cmap='plasma', vmin=0, vmax=5
+        cmap='plasma', vmin=0, vmax=1
     )
     plt.colorbar(PDE_img, ax=ax2)
     
