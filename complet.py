@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import pandas as pd
 from datetime import datetime
+import pickle
 
 
 # ============================================
@@ -33,8 +34,15 @@ print("Device for torch operations:", device)
 # ============================================
 # Générer le chemin avec la date et l'heure
 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-PATH = f"/Users/souchaud/Desktop/simulations/simu_{timestamp}/"
+GENERAL_PATH = "/Users/souchaud/Desktop/simulations/"
+# Vérifier si le dossier existe déjà
+if os.path.exists(GENERAL_PATH):
+    print(f"Le dossier {GENERAL_PATH} existe déjà. Ajout du contenu dans ce dossier.")
+else:
+    os.makedirs(GENERAL_PATH)  # Crée le dossier
 
+# Création du dossier spécifique à la simulation.
+PATH = f"/Users/souchaud/Desktop/simulations/simu_{timestamp}/"
 # Vérifier si le dossier existe déjà
 if os.path.exists(PATH):
     print(f"ATTENTION : Le dossier {PATH} existe déjà. Son contenu sera écrasé.")
@@ -42,48 +50,56 @@ else:
     os.makedirs(PATH)  # Crée le dossier
 
 print(f"📁 Dossier de simulation créé : {PATH}")
+
+# ------------------
+# Etat initial
+# ------------------
+use_saved_state = True
+save_new_initial_state = False
+
+# ------------------
 # Espace / Temps
 # ------------------
-SPACE_SIZE = 250.0    # taille du domaine de la simulation (microns)
-TIME_SIMU = 500.0       # durée de la simulation (minutes)
-PLOT_INTERVAL = 10     # fréquence de traçage/sauvegarde
+SPACE_SIZE = 500.0    # taille du domaine de la simulation (microns)
+TIME_SIMU = 120.0       # durée de la simulation (minutes)
+PLOT_INTERVAL = 250     # fréquence de traçage/sauvegarde
 
 # ------------------
 # Paramètres "physiques" (forces)
 # ------------------
-MU = 1.0               # coefficient de "mobilité" (prémultiplicateur des forces)
-F_REP = 40.0           # force répulsive maximale
-F_ADH = 7.0            # force adhésive maximale
-R_EQ = 2 # 1.1             # distance d'équilibre
-R_0 = 3.8 #1.6              # distance maximale d'interaction
-COEFF_CARRE = 50.0     # paramètre pour la force d'adhésion "modifiée"
-COEFF_REP = 0.5        # coefficient pour la répulsion
-FLUCTUATION_FACTOR = 3 # fluctuation aléatoire sur la vitesse
+MU = 1.0  # coefficient de "mobilité"
+F_REP = 0 # 40.0  # force répulsive maximale
+F_ADH = 0 # 7.0  # force adhésive maximale
+R_EQ = 4.0  # distance d'équilibre
+R_0 = 3.8  # distance maximale d'interaction
+COEFF_CARRE = 50.0  # paramètre pour la force d'adhésion
+COEFF_REP = 0.5  # coefficient pour la répulsion
+FLUCTUATION_FACTOR = 3  # fluctuation aléatoire sur la vitesse
 
 # ------------------
 # Paramètres "biochimiques" (cAMP / PDE)
 # ------------------
-GRID_RESOLUTION = 1.0     # taille d'une case en microns
-D_CAMP = 1.0*3              # Diffusion du cAMP (µm²/min)
-D_PDE = 1.0*3              # Diffusion de la PDE (µm²/min)
-PDE_threshold = 0.150 # 0.2       # Seuil cAMP pour production PDE
-PDE_rate = 2000.0         # Facteur de production PDE
-PDE_decay = 0.1           # Dégradation basique PDE (min^-1)
-rho = 0.05                # Production basale de cAMP
-alpha0 = 1.0              # Facteur normalisation pour la production cAMP
-J = 0.08                  # Taux de dégradation global du cAMP (min^-1)
-k_PDE = 15.0              # Taux dégradation cAMP par PDE (min^-1)
-PDE_inhibition_threshold = 0.06   # Seuil PDE pour inhibition progressive cAMP
+GRID_RESOLUTION = 1.0  # taille d'une case en microns
+D_CAMP = 150.0  # Diffusion du cAMP (µm²/min)
+D_PDE = 100.0  # Diffusion de la PDE (µm²/min)
+PDE_threshold = 1e-8  # Seuil cAMP pour production PDE
+PDE_rate = 1.0  # Facteur de production PDE
+PDE_decay = 0.4 #0.1  # Dégradation basique PDE (min^-1)
+rho = 1e-5  # Production basale de cAMP
+alpha0 = 9.8e-6  # Facteur normalisation pour la production cAMPj'ai
+J = 0.01  # Taux de dégradation global du cAMP (min^-1)
+k_PDE = 1.0  # Taux dégradation cAMP par PDE (min^-1)
+PDE_inhibition_threshold = 5e-6  # Seuil PDE pour inhibition progressive cAMP
 
 # ------------------
 # Martiel–Goldbeter (paramètres cellulaires)
 # ------------------
-F1_base = 0.4     # taux de désensibilisation de base
-F2_base = 0.7     # taux de réactivation de base
-n = 4.0           # exposant de Hill (récepteur)
-K_h = 0.8         # constante demi-sat. pour désensibilisation
-hill_n = 1.0      # exposant de Hill pour boucle de rétroaction (production)
-hill_K_h = 0.1    # constante demi-sat. pour boucle de rétroaction
+F1_base = 1.4     # taux de désensibilisation de base
+F2_base = 1.7     # taux de réactivation de base
+n = 4# 4.0           # exposant de Hill (récepteur)
+K_h = 0.8 #0.8         # constante demi-sat. pour désensibilisation
+hill_n = 3 #0.1      # exposant de Hill pour boucle de rétroaction (production) : augmentation avec ralentissement de la première montée cAMP
+hill_K_h = 1e-6    # constante demi-sat. pour boucle de rétroaction
 
 # ------------------
 # Paramètres population
@@ -93,7 +109,7 @@ PACKING_FRACTION = 0.8  # Fraction d'occupation de l'espace
 # On calcule le nombre de cellules sur la base de la fraction d'occupation
 estimated_cell_area = math.pi * (R_EQ)**2
 N_CELLS = int(PACKING_FRACTION * 0.9 * (SPACE_SIZE**2) / estimated_cell_area)
-N_CELLS = 2800
+N_CELLS = 2500
 print(f"Nombre de cellules estimé = {N_CELLS}")
 
 # ------------------
@@ -104,24 +120,25 @@ print(f"Nombre de cellules estimé = {N_CELLS}")
 # ΔT doit vérifier : (D * ΔT) / (Δx)^2 < 0.5
 # Ce qui donne : ΔT < 0.5 * (Δx)^2 / D
 DELTA_T = 0.5*(GRID_RESOLUTION**2)/ min(D_CAMP, D_PDE) 
-DELTA_T = min(DELTA_T, 0.05)          # pas de temps (minutes)
+DELTA_T = min(DELTA_T, 0.001)          # pas de temps (minutes)
+print("Pas de temps : ", DELTA_T)
 # ------------------
 # Paramètres "cinétiques" pour le mouvement
 # ------------------
 # Paramètres pour deux populations
 # ----------------
 # Paramètres pour Population 1
-velocity_magnitude_pop1 = 0.3         # Vitesse moyenne (μm/min) pour Pop 1
+velocity_magnitude_pop1 = 0         # Vitesse moyenne (μm/min) pour Pop 1
 ECART_TYPE_POP1 = 0.3                # Dispersion autour de la vitesse moyenne
-NOISE_POP_1 = 2                      # Intensité du bruit directionnel
+NOISE_POP_1 = 0#2                      # Intensité du bruit directionnel
 TAU_POP_1 = 5                        # Temps de persistance (min)
 PERSISTENCE_POP1 = 0                 # Pas de persistance (0 = aucune)
 SENSITIVITY_cAMP_THRESHOLD_POP1 = 2  # Seuil de détection du cAMP
 
 # Paramètres pour Population 2
-velocity_magnitude_pop2 = 0.6         # Vitesse moyenne (μm/min) pour Pop 2
+velocity_magnitude_pop2 = 0.1      # Vitesse moyenne (μm/min) pour Pop 2
 ECART_TYPE_POP2 = 0.5                # Dispersion de la vitesse
-NOISE_POP_2 = 2                      # Intensité du bruit directionnel
+NOISE_POP_2 = 0# 2                      # Intensité du bruit directionnel
 TAU_POP_2 = 5                        # Temps de persistance (min)
 PERSISTENCE_POP2 = 0                 # Pas de persistance
 SENSITIVITY_cAMP_THRESHOLD_POP2 = 2  # Seuil de détection du cAMP
@@ -232,35 +249,76 @@ def update_cell_MG(cell, local_cAMP, dt):
     cell.r_T += dr_T * dt
     cell.b   += db   * dt
 
+def compute_PDE_production(local_cAMP):
+    """
+    Calcule la production de PDE avec activation sinusoïdale pour une montée douce.
+    - Aucune production pour local_cAMP < 5e-7.
+    - Entre 5e-7 et 1e-6, la production augmente progressivement.
+    - Au-delà de 1e-6, la production est saturée.
+    """
+    if local_cAMP < PDE_threshold:
+        return 0.0  # Aucune production en dessous de 5e-7
+    
+    # Normalisation sur l'intervalle [5e-7, 1e-6]
+    normalized_cAMP = (local_cAMP - PDE_threshold) / (1e-6 - PDE_threshold)
+    normalized_cAMP = min(max(normalized_cAMP, 0), 1)  # Clamp entre 0 et 1
+    
+    # Activation sinusoïdale pour une montée douce (inspiration sin²)
+    sin_factor = np.sin(np.pi * normalized_cAMP / 2)**2
+
+    return PDE_rate * sin_factor  # Appliquer le facteur à la production
+
+
+def update_cell_PDE_production(cell, local_cAMP, dt):
+    """
+    Met à jour progressivement le niveau de production de PDE d'une cellule.
+    - Si local_cAMP > PDE_threshold → montée progressive via une sinusoïde
+    - Si local_cAMP < PDE_threshold → descente progressive
+    """
+    ramp_up   = 0.002  # Vitesse d'augmentation de production
+    ramp_down = 0.7  # Vitesse de diminution de production
+
+    if local_cAMP > PDE_threshold:
+        # Utilisation de la fonction sinusoïdale pour la montée progressive
+        cell.pde_production_level += ramp_up * dt * compute_PDE_production(local_cAMP)
+    else:
+        # La production redescend progressivement vers 0
+        cell.pde_production_level -= ramp_down * dt
+
+    # On s'assure que la valeur reste entre 0 et 1
+    cell.pde_production_level = max(0.0, min(1.0, cell.pde_production_level))
+
+    # Production effective de PDE
+    return cell.pde_production_level * PDE_rate * local_cAMP
+
+
+def compute_cAMP_production(local_cAMP, local_PDE):
+    """
+    Calcule la production de cAMP avec une modulation sinusoïdale du feedback.
+    - Le feedback atteint son maximum lorsque local_cAMP = 1e-6.
+    """
+    cAMP_max = 1e-6  # Le feedback maximal est atteint pour une concentration de 1e-6
+    
+    if local_cAMP < cAMP_max:
+        feedback = (np.sin(np.pi * local_cAMP / (2 * cAMP_max))**2 )
+    else:
+        feedback = 1.0  # Saturation au-delà de 1e-6
+
+    # Inhibition progressive par la PDE
+    inhibition = 1.0 / (1.0 + (local_PDE / PDE_inhibition_threshold)**2) if local_PDE > 0 else 1.0
+
+    return rho * alpha0 + feedback * inhibition
+
 def produce_cAMP(cell, local_cAMP, local_PDE, dt):
     """
     Production locale de cAMP autour de la cellule, incluant :
       - Production basale
-      - Rétroaction positive Hill
+      - Rétroaction positive sinusoïdale
       - Inhibition PDE
     """
-    prod = rho * alpha0 * dt
-    
-    # Rétroaction positive
-    feedback = 0.0
-    if local_cAMP > 0:
-        feedback = (local_cAMP**hill_n) / (hill_K_h**hill_n + local_cAMP**hill_n)
-    prod += feedback * dt
-    
-    # Inhibition par la PDE
-    inhibition = 1.0 / (1.0 + (local_PDE / PDE_inhibition_threshold)**2) if local_PDE>0 else 1.0
-    prod *= inhibition
-    
+    prod = compute_cAMP_production(local_cAMP, local_PDE) * dt
+
     return prod
-
-def compute_cell_PDE(cell, local_cAMP):
-    """
-    Production de PDE si la concentration locale de cAMP dépasse un seuil.
-    """
-    if local_cAMP > PDE_threshold:
-        return PDE_rate * (local_cAMP - PDE_threshold)
-    return 0.0
-
 # ============================================
 # 3) Classes et "Agents"
 # ============================================
@@ -270,6 +328,7 @@ class CellAgent:
     - Position et vitesse dans un espace 2D
     - Direction de déplacement avec persistance et bruit
     - État interne Martiel-Goldbeter : AMPc intracellulaire (b), récepteurs actifs (r_T)
+    - Production progressive de PDE avec `pde_production_level`
     - Identifiant unique pour traçabilité
     """
 
@@ -310,6 +369,9 @@ class CellAgent:
         # Attributs biochimiques Martiel-Goldbeter
         self.b = 0.0      # AMPc intracellulaire initial
         self.r_T = 1.0    # Fraction initiale de récepteurs actifs (1 = 100% actifs)
+
+        # Ajout de l'état interne pour la production progressive de PDE
+        self.pde_production_level = 0.0  # Niveau initial de production (entre 0 et 1)
 
 class Population:
     """
@@ -445,7 +507,7 @@ def plot_cells_and_fields(cells, camp_grid, pde_grid, iteration, time_now,
     extent = [0, space_size, 0, space_size]
     cAMP_img = ax1.imshow(
         camp_grid.T, origin='lower', extent=extent,
-        cmap='viridis', vmin=0, vmax=0.2
+        cmap='viridis', vmin=0, #vmax=9e-6
     )
     plt.colorbar(cAMP_img, ax=ax1)
     
@@ -455,7 +517,7 @@ def plot_cells_and_fields(cells, camp_grid, pde_grid, iteration, time_now,
     ax2.set_aspect('equal', adjustable='box')  # Assure une échelle identique en x et y
     PDE_img = ax2.imshow(
         pde_grid.T, origin='lower', extent=extent,
-        cmap='plasma', vmin=0, vmax=1
+        cmap='plasma', vmin=0, #vmax=1
     )
     plt.colorbar(PDE_img, ax=ax2)
     
@@ -464,6 +526,9 @@ def plot_cells_and_fields(cells, camp_grid, pde_grid, iteration, time_now,
         plt.savefig(filename, dpi=200)
     plt.close(fig)
 
+# ============================================
+# 5) Sauvegarde et chargement d'un état initial donné
+# ============================================
 def save_simulation_parameters(filename="simulation_parameters.txt"):
     """
     Enregistre tous les paramètres de simulation dans un fichier texte.
@@ -577,6 +642,66 @@ def save_simulation_parameters(filename="simulation_parameters.txt"):
 
     print(f"Les paramètres de simulation ont été enregistrés dans '{filename}'.")
 
+def save_initial_state(cells, filename="initial_state.pkl"):
+    """
+    Sauvegarde l'état initial des cellules (positions, vitesses, direction, état interne).
+    
+    Args:
+        cells (list): Liste des objets `CellAgent`
+        filename (str): Nom du fichier de sauvegarde
+    """
+    state_data = [
+        {
+            'id': cell.id,
+            'position': cell.position.cpu().numpy(),  # Conversion Tensor → NumPy
+            'velocity': cell.velocity.cpu().numpy(),
+            'direction': cell.direction.cpu().numpy(),
+            'velocity_magnitude': cell.velocity_magnitude,
+            'b': cell.b,
+            'r_T': cell.r_T,
+            'pop': cell.pop
+        }
+        for cell in cells
+    ]
+
+    with open(filename, "wb") as f:
+        pickle.dump(state_data, f)
+    
+    print(f"✅ État initial sauvegardé dans '{filename}'")
+
+def load_initial_state(filename="initial_state.pkl"):
+    """
+    Charge un état initial enregistré et recrée les cellules.
+
+    Args:
+        filename (str): Nom du fichier de sauvegarde
+    
+    Returns:
+        list: Liste des objets `CellAgent` recréés
+    """
+    with open(filename, "rb") as f:
+        state_data = pickle.load(f)
+    
+    loaded_cells = []
+    for data in state_data:
+        cell = CellAgent(
+            position=torch.tensor(data['position'], dtype=torch.float, device=device),
+            velocity=torch.tensor(data['velocity'], dtype=torch.float, device=device),
+            velocity_magnitude=data['velocity_magnitude'],
+            space_size=SPACE_SIZE,
+            tau=TAU_POP_1 if data['pop'] == "Population 1" else TAU_POP_2,
+            noise=NOISE_POP_1 if data['pop'] == "Population 1" else NOISE_POP_2,
+            persistence=PERSISTENCE_POP1 if data['pop'] == "Population 1" else PERSISTENCE_POP2,
+            pop_tag=data['pop']
+        )
+        cell.direction = torch.tensor(data['direction'], dtype=torch.float, device=device)
+        cell.b = data['b']
+        cell.r_T = data['r_T']
+        loaded_cells.append(cell)
+    
+    print(f"✅ État initial chargé depuis '{filename}'")
+    return loaded_cells
+
 save_simulation_parameters(PATH + "simulation_parameters.txt")
 # ============================================
 # 6) Main: Boucle principale de simulation
@@ -585,41 +710,48 @@ def main():
     # --------------------------
     # Préparation / initialisation
     # --------------------------
-    # Création d'une population de cellules
-    # Initialisation du compteur d'ID
-    CellAgent._id_counter = 0
+    if use_saved_state:
+        # Charger l'état initial
+        cells = load_initial_state(GENERAL_PATH + "initial_state.pkl")
+    else:
+        # Création d'une population de cellules
+        # Initialisation du compteur d'ID
+        CellAgent._id_counter = 0
 
-    # 1) Première population (pas d'existing_cells)
-    population1 = Population(
-        num_cells=pop1,
-        space_size=SPACE_SIZE,
-        velocity_magnitude=velocity_magnitude_pop1,
-        ecart_type=ECART_TYPE_POP1,
-        persistence=PERSISTENCE_POP1,
-        min_distance=MIN_DISTANCE_INIT,
-        pop_tag="Population 1",
-        tau=TAU_POP_1,
-        noise=NOISE_POP_1,
-        req=R_EQ
-    )
+        # 1) Première population (pas d'existing_cells)
+        population1 = Population(
+            num_cells=pop1,
+            space_size=SPACE_SIZE,
+            velocity_magnitude=velocity_magnitude_pop1,
+            ecart_type=ECART_TYPE_POP1,
+            persistence=PERSISTENCE_POP1,
+            min_distance=MIN_DISTANCE_INIT,
+            pop_tag="Population 1",
+            tau=TAU_POP_1,
+            noise=NOISE_POP_1,
+            req=R_EQ
+        )
 
-    # 2) Deuxième population (en tenant compte des cellules déjà placées)
-    population2 = Population(
-        num_cells=pop2,
-        space_size=SPACE_SIZE,
-        velocity_magnitude=velocity_magnitude_pop2,
-        ecart_type=ECART_TYPE_POP2,
-        persistence=PERSISTENCE_POP2,
-        min_distance=MIN_DISTANCE_INIT,
-        pop_tag="Population 2",
-        tau=TAU_POP_2,
-        noise=NOISE_POP_2,
-        req=R_EQ,
-        existing_cells=population1.cells  # Important : éviter les collisions
-    )
+        # 2) Deuxième population (en tenant compte des cellules déjà placées)
+        population2 = Population(
+            num_cells=pop2,
+            space_size=SPACE_SIZE,
+            velocity_magnitude=velocity_magnitude_pop2,
+            ecart_type=ECART_TYPE_POP2,
+            persistence=PERSISTENCE_POP2,
+            min_distance=MIN_DISTANCE_INIT,
+            pop_tag="Population 2",
+            tau=TAU_POP_2,
+            noise=NOISE_POP_2,
+            req=R_EQ,
+            existing_cells=population1.cells  # Important : éviter les collisions
+        )
 
-    # Regroupement des cellules
-    cells = population1.cells + population2.cells
+        # Regroupement des cellules
+        cells = population1.cells + population2.cells
+        if save_new_initial_state:
+            # Sauvegarde de l'état initial après génération
+            save_initial_state(cells, GENERAL_PATH + "initial_state.pkl")
     
     # Grille 2D cAMP / PDE
     GRID_SIZE = int(np.ceil(SPACE_SIZE / GRID_RESOLUTION))
@@ -683,10 +815,11 @@ def main():
             
             # Production brute
             cAMP_brut = produce_cAMP(cell, cAMP_local, PDE_local, DELTA_T)
-            PDE_brut  = compute_cell_PDE(cell, cAMP_local)
-            
+            # PDE_brut  = compute_cell_PDE(cell, cAMP_local)
+            PDE_brut = update_cell_PDE_production(cell, cAMP_local, DELTA_T)
+
             # Mise à l'échelle (cf. Martiel–Goldbeter code)
-            production_scaling = (GRID_RESOLUTION**2)
+            production_scaling = (GRID_RESOLUTION**2)#*10*np.pi
             cAMP_brut /= production_scaling
             PDE_brut  /= production_scaling
             
