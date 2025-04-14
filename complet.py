@@ -133,6 +133,8 @@ PDE_decay = 1.3 # 0.8 #0.3  # Dégradation basique PDE (min^-1)
 CHI_CHEMO = 1.0         # Coefficient de sensibilité de base
 ALPHA_CHEMO = 1.2e5   #80% # Paramètre de saturation (à ajuster selon l'échelle du cAMP)
 LAMBDA_CHEMO = 0.5      # Poids de l'influence chimiotactique sur la nouvelle direction 
+BETA_CHEMO_DERIV = 0.3   # pondère l'effet de la dérivée dans la dérive en fonction de la chimiotaxie
+MIN_CAMP_SENSITIVITY = 1e-8 # Seuil de sensibilité au cAMP pour la chimiotaxie
 
 # ------------------
 # Paramètres population
@@ -313,45 +315,6 @@ def compute_PDE_production(local_cAMP, hill_n_PDE=2, PDE_threshold=1e-4, PDE_rat
     production = PDE_rate * (local_cAMP**hill_n_PDE / (PDE_threshold**hill_n_PDE + local_cAMP**hill_n_PDE))
     return production
 
-# def compute_PDE_production(local_cAMP, hill_n_PDE=2, PDE_threshold=1e-4, PDE_rate=10000.0):
-#     """
-#     Calcule la production de PDE de manière "step" :
-#       - Si la concentration locale de cAMP est supérieure ou égale à PDE_threshold,
-#         la production est fixée à une valeur constante (PDE_rate).
-#       - Sinon, la production est nulle.
-    
-#     Args:
-#         local_cAMP (float): Concentration locale de cAMP (en M)
-    
-#     Returns:
-#         float: Production de PDE (unités arbitraires)
-#     """
-#     if local_cAMP >= PDE_threshold:
-#         return PDE_rate  # production forte et constante
-#     else:
-#         return 0.0       # production arrêtée
-
-# def update_cell_PDE_production(cell, local_cAMP, ramp_up, ramp_down, dt):
-#     """
-#     Met à jour progressivement le niveau de production de PDE d'une cellule.
-#     - Si local_cAMP > PDE_threshold → montée progressive via une sinusoïde
-#     - Si local_cAMP < PDE_threshold → descente progressive
-#     """
-
-
-#     if local_cAMP > PDE_threshold:
-#         # Utilisation de la fonction sinusoïdale pour la montée progressive
-#         cell.pde_production_level += ramp_up * dt * compute_PDE_production(local_cAMP)
-#     else:
-#         # La production redescend progressivement vers 0
-#         cell.pde_production_level -= ramp_down * dt
-
-#     # On s'assure que la valeur reste entre 0 et 1
-#     cell.pde_production_level = max(0.0, min(1.0, cell.pde_production_level))
-
-#     # Production effective de PDE
-#     return cell.pde_production_level * PDE_rate * local_cAMP
-
 def compute_cAMP_production(local_cAMP, local_PDE, cAMP_max=1e-5):
     """
     Calcule la production de cAMP avec un feedback de type Hill.
@@ -440,6 +403,9 @@ class CellAgent:
 
         # Ajout de l'état interne pour la production progressive de PDE
         self.pde_production_level = 0.0  # Niveau initial de production (entre 0 et 1)
+
+        # Attributs pour la production de cAMP : suivre la concentration de cAMP du pas précédent
+        self.last_cAMP = 0.0
 
 class Population:
     """
@@ -1166,9 +1132,16 @@ def main():
                 
                 # Obtenir la concentration locale de cAMP
                 local_cAMP = camp_grid[x_idx, y_idx]
+                # 1) Calcul de la dérivée 
+                cAMP_deriv = (local_cAMP - cell.last_cAMP) / DELTA_T
+                cell.last_cAMP = local_cAMP  # on met à jour la valeur
+
+                # 2) On calcule la sensibilité spatiale M2 comme d’hab
                 # Calcul de la sensibilité suivant le modèle M2 (forme "récepteur")
                 S = CHI_CHEMO / (1 + ALPHA_CHEMO * local_cAMP)**2
                 
+                BETA_CHEMO_DERIV = 0.3   # pondère l'effet de la dérivée
+
                 # Extraire la direction du gradient (calculé sur camp_grid.T)
                 grad_vec = np.array([grad_x_np[x_idx, y_idx], grad_y_np[x_idx, y_idx]])
                 norm_grad = np.linalg.norm(grad_vec)
@@ -1178,8 +1151,22 @@ def main():
                     chemotactic_direction = np.array([0.0, 0.0])
                 chemotactic_direction_tensor = torch.tensor(chemotactic_direction, device=device, dtype=torch.float)
                 
-                # Combiner la direction autovel et le terme chimiotactique
-                combined = auto_dir + LAMBDA_CHEMO * S * chemotactic_direction_tensor
+                # # Combiner la direction autovel et le terme chimiotactique
+                # combined = auto_dir + LAMBDA_CHEMO * S * chemotactic_direction_tensor
+                if local_cAMP > MIN_CAMP_SENSITIVITY:
+                    # Pas de chimio, la concentration est trop basse
+                    combined = auto_dir
+                else:
+                    if cAMP_deriv > 0:
+                        # On oriente la cellule dans la direction du gradient
+                        deriv_direction = chemotactic_direction_tensor  
+                        # ou plus finement : grad_vec / norm_grad
+                    else:
+                        deriv_direction = torch.zeros(2, device=device)
+
+                    deriv_term = BETA_CHEMO_DERIV * cAMP_deriv * deriv_direction
+
+                    combined = auto_dir + LAMBDA_CHEMO * S * chemotactic_direction_tensor + deriv_term
 
                 if torch.norm(combined) > 0:
                     new_direction = torch.nn.functional.normalize(combined.unsqueeze(0), dim=1).squeeze(0)
