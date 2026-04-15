@@ -183,7 +183,10 @@ def read_hdf5_all2(pathway_experiment, condition, name_file='filtered',
     for path in pathway_experiment:
         data_exp = pd.DataFrame()
         # Récupération du nom de la manipulation à partir du chemin
-        manip_name = re.search('ASMOT[0-9]{3}', path).group()
+        manip_name_search = re.search('ASMOT[0-9]{3}', path)
+        if manip_name_search is None:
+            continue
+        manip_name = manip_name_search.group()
 
         list_files_to_read = [path + f for f in os.listdir(path)
                               if f.endswith(".hdf5") and f'{name_file}' in f]
@@ -220,7 +223,7 @@ def read_hdf5_all2(pathway_experiment, condition, name_file='filtered',
             data["experiment"] = manip_name
             # Ajout de la colonne "position"
             data["position"] = position
-            data_exp = pd.concat([data, data_exp])
+            data_exp = pd.concat([data, data_exp], ignore_index=True)
             if len(data_all) != 0:
                 last_part_num = data_all['particle'].max() + data_exp['particle'].nunique() + 1
             else:
@@ -231,9 +234,7 @@ def read_hdf5_all2(pathway_experiment, condition, name_file='filtered',
                                     name=manip_name + '_' + position)
             data_exp = data_exp.drop('frame', axis=1)
             data_exp = data_exp.reset_index()
-        data_all = pd.concat([data_all, data_exp])
-        data_all = data_all.reset_index()
-        data_all = data_all.drop('index', axis=1)
+        data_all = pd.concat([data_all, data_exp], ignore_index=True)
         print(manip_name, " : ", data_exp['particle'].nunique())
     data_all['condition'] = condition
     print("Nombre de particules récoltées avant tri: ", data_all['particle'].nunique())
@@ -1218,7 +1219,8 @@ def creating_gif_JP(datas: pd.DataFrame(), particle_infos: dict, pathway_saving=
     # je créé un dossier spécial pour la particule étudiée
     pathway_saving += "_".join([particle_infos['position'], 'particle',
                                 str(particle_infos['particle'])]) + '/'
-    os.mkdir(pathway_saving)
+    if not os.path.exists(pathway_saving):
+        os.mkdir(pathway_saving)
     # JE dois vérifier que ça fonctionne avant, mais il faut tracer que le
     # centre de masse de la particule d'interet
     draw_center_of_mass(frames,
@@ -2360,10 +2362,6 @@ def plot_mean_speed(y_value, x_value=None, pathway=None, title=None,
     # for i , ax in np.ndenumerate(axs):
     for i, axs in enumerate(axis.flatten()):
         if i < len(y_value):
-            try:
-                y_value[i]
-            except ValueError:
-                continue
             axs.plot(x_value[i], y_value[i], alpha=1, linewidth=0.5)
             axs.set_ylim([0, 20])
             axs.set_xlabel("time (frame)", fontsize=30)
@@ -2741,10 +2739,7 @@ def indice_confiance(data, mpp, fps):
     IMSD = tp.imsd(data, mpp=mpp, fps=fps)
 
     # Imsd = IMSD_vite
-    df = pd.DataFrame()
-    for col in IMSD.columns:
-        df = pd.concat([df, IMSD[col]], axis=0)
-    df.reset_index(inplace=True)
+    df = pd.concat([IMSD[col] for col in IMSD.columns], axis=0).reset_index(drop=True)
 
     int_sup = []
     int_inf = []
@@ -2933,9 +2928,8 @@ def modified_plot_traj(traj,
                 x = segment[pos_columns[0]].values
                 y = segment[pos_columns[1]].values
                 speed_avg = segment[color_column].mean()
-                norm_speed = (speed_avg - min_speed) / (max_speed - min_speed)
-                # Utiliser la normalisation définie pour déterminer la couleur
-                norm_speed = norm(speed_avg)  # Normalise la vitesse moyenne entre 0 et 8
+                # Normalise la vitesse selon vmin/vmax via mcolors.Normalize
+                norm_speed = norm(speed_avg)
                 color = cmap(norm_speed)
                 # color = cmap(norm_speed)
 
