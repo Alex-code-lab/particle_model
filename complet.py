@@ -116,7 +116,7 @@ K_relay = 3.0e-5   # gain relais 2D restauré : le gain 1D était trop fort une 
 # ------------------
 hill_n_PDE = 2
 PDE_rate = 0.004       # production PDE modérée : évite de bloquer immédiatement le relais
-PDE_threshold = 3e-8   # 30 nM — proche du seuil d'activation récepteur
+PDE_threshold = 8e-8  # 30 nM — proche du seuil d'activation récepteur
 PDE_decay = 0.12       # valeur de la configuration oscillante précédente
 
 # Cellules pionnières / pacemaker de famine
@@ -471,7 +471,7 @@ def plot_cells_and_fields(cells, camp_grid, pde_grid, iteration, time_now,
     ax2.set_aspect('equal')
     PDE_img = ax2.imshow(
         pde_grid.T, origin='lower', extent=extent,
-        cmap='plasma', vmin=0
+        cmap='plasma', vmin=0, vmax=1e-6
     )
     plt.colorbar(PDE_img, ax=ax2, shrink=0.8)
 
