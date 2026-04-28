@@ -57,9 +57,9 @@ use_saved_snap_shot = False
 # ------------------
 # Espace / Temps
 # ------------------
-SPACE_SIZE = 500.0    # taille du domaine de la simulation (microns)
+SPACE_SIZE = 400.0   # taille du domaine de la simulation (microns)
 TIME_SIMU = 300.0     # durée de la simulation (minutes)
-PLOT_INTERVAL = 500   # fréquence de traçage/sauvegarde
+PLOT_INTERVAL = 250   # fréquence de traçage/sauvegarde
 
 delta_t_diff = 0.001
 delta_t_prod = 0.005
@@ -68,36 +68,37 @@ delta_t_mvt  = 0.02
 # ------------------
 # Paramètres "physiques" (forces)
 # ------------------
-MU = 1.0              # coefficient de mobilité
+MU = 0.0              # coefficient de mobilité — 0 pour valider d'abord la diffusion sans mouvement
 F_REP = 51.2          # force répulsive maximale
 F_ADH = 8.96          # force adhésive maximale
-R_EQ = 1.4            # distance d'équilibre (microns)
-R_0 = 2.04            # distance maximale d'interaction (microns)
+R_EQ = 8.0             # distance d'équilibre (µm) — diamètre réel Dictyostelium ~10 µm → R_EQ ≈ diamètre
+R_0 = 12.0            # distance maximale d'interaction (µm) — 1.5 × R_EQ
 COEFF_REP = 0.5       # coefficient pour la répulsion
-FLUCTUATION_FACTOR = 3
+FLUCTUATION_FACTOR = 0
+# Packing check : N_CELLS × π × (R_EQ/2)² / SPACE_SIZE² ≈ 8000 × π × 16 / 1e6 ≈ 40 % (réaliste)
 
 # ------------------
 # Paramètres "biochimiques" (cAMP / PDE)
 # ------------------
-GRID_RESOLUTION = 1.0        # taille d'une case en microns
-D_CAMP = 300.0               # Diffusion du cAMP (µm²/min) — valeurs litt. : 240-600 µm²/min
+GRID_RESOLUTION = 2.0        # taille d'une case en microns (2 µm → grille 500×500 pour 1000 µm)
+D_CAMP = 300.0               # Diffusion du cAMP (µm²/min) — lit. 240-600 µm²/min ; L=√(D/J)=27 µm > espacement cellulaire
 D_PDE = 50.0                 # Diffusion de la PDE (µm²/min)
-rho = 5e-5                   # Production basale de cAMP (réduite ×100 pour garder le basal en nM)
-alpha0 = 5.5e-5              # Facteur normalisation → rho*alpha0 = 2.75e-9 M/min par cellule
-J = 0.3                      # Taux de dégradation global du cAMP (min^-1) — augmenté pour maintenir basal bas
-PDE_inhibition_threshold = 1.5e-3  # Seuil PDE (50% inhibition) ≈ moitié du pde_ss attendu pendant une vague
-k_PDE = 800                  # Taux dégradation cAMP par PDE (M⁻¹ min⁻¹)
+rho = 0.0                    # Pas de production basale : toute sécrétion passe par le relais (b > 0)
+alpha0 = 5.5e-5              # (inutilisé si rho=0 — conservé pour référence)
+J = 0.20                     # perte globale minimale, comme dans le test 1D fonctionnel
+PDE_inhibition_threshold = 8.0e-5  # seuil PDE repris du test 1D fonctionnel
+k_PDE = 2e4                  # dégradation cAMP par PDE reprise du test 1D fonctionnel
 
 # ------------------
 # Martiel–Goldbeter (paramètres cellulaires)
 # ------------------
-F1_base = 1.5    # taux de désensibilisation de base (min⁻¹) — plus fort pour créer la période réfractaire
-F2_base = 0.18   # taux de réactivation (min⁻¹) — cible : réfractaire ~12 min → période vague ~15 min
-N_HILL = 2       # exposant de Hill pour les récepteurs
-K_h = 3e-8       # constante demi-saturation pour la désensibilisation (M) — CORRIGÉ : maintenant en Moles (30 nM)
+F1_base = 0.8    # taux de désensibilisation (min⁻¹) — réfractaire modéré pour permettre le relais
+F2_base = 0.06   # taux de réactivation (min⁻¹) — récupération suffisante entre deux vagues
+N_HILL = 4       # exposant de Hill : réponse excitable coopérative
+K_h = 3e-8       # constante demi-saturation (M) = 30 nM
 
-q_s = 6e-6       # production intracellulaire (cAMP/min)
-k_t = 0.8        # dégradation intracellulaire (min^-1)
+q_s = 2.0e-5     # production intracellulaire (cAMP/min) — renforce la réponse relais
+k_t = 0.9        # dégradation intracellulaire (min^-1)
 
 # ------------------
 # Paramètres pour la production extracellulaire de cAMP
@@ -108,15 +109,29 @@ cAMP_max = 1e-6
 # Gain du relais : amplitude maximale de production induite (M/min par cellule par µm²)
 # Remplace l'implicite "1.0 M/min" qui était hors échelle.
 # Cible : pic de vague ≈ 300 nM → K_relay = cAMP_pic × J / densité_cellulaire
-K_relay = 2.5e-6
+K_relay = 3.0e-5   # gain relais 2D restauré : le gain 1D était trop fort une fois déposé sur une grille 2D
 
 # ------------------
 # Paramètres pour la production de PDE
 # ------------------
 hill_n_PDE = 2
-PDE_rate = 0.05
-PDE_threshold = 1e-8   # demi-saturation production PDE (M) — CORRIGÉ : 10 nM (était 10 µM, hors plage)
-PDE_decay = 0.5        # dégradation PDE (min⁻¹) — réduit (était 1.3) pour que la PDE s'accumule derrière la vague
+PDE_rate = 0.004       # production PDE modérée : évite de bloquer immédiatement le relais
+PDE_threshold = 3e-8   # 30 nM — proche du seuil d'activation récepteur
+PDE_decay = 0.12       # valeur de la configuration oscillante précédente
+
+# Cellules pionnières / pacemaker de famine
+# ------------------
+PIONEER_FRACTION = 0.02        # fraction de cellules pionnières autonomes pour les tests courts
+PIONEER_A_INITIAL = 0.74       # proche du seuil pour déclencher des pulses rapidement sans attendre 40 min
+PIONEER_A_MIN = 0.02
+PIONEER_A_MAX = 1.0
+PIONEER_A_TRIGGER = 0.75       # seuil de déclenchement autonome
+PIONEER_A_RESET = 0.04         # remise à zéro après un pulse
+PIONEER_A_RECOVERY = 0.050     # récupération un peu accélérée pour retrouver plusieurs pulses dans un test court
+PIONEER_PULSE_DURATION = 2.8   # durée d'un pulse autonome (min)
+PIONEER_PULSE_STRENGTH = 1.0   # activation AC pendant le pulse
+F0_PIONEER_BASE = 0.01         # faible activité basale des pionnières, comme f0_pacemaker dans le test 1D
+F0_RELAY_BASE = 0.0            # cellules relais silencieuses sans stimulation
 
 # ------------------
 # Paramètres Chimiotaxie
@@ -132,7 +147,7 @@ MIN_CAMP_SENSITIVITY = 1e-9
 # ------------------
 PACKING_FRACTION = 0.8
 estimated_cell_area = math.pi * (R_EQ)**2
-N_CELLS = 8000
+N_CELLS = 500
 print(f"Nombre de cellules = {N_CELLS}")
 
 # ------------------
@@ -158,17 +173,19 @@ if not math.isclose(delta_t_prod / dt_base, ratio_prod, rel_tol=1e-6):
 # ------------------
 # Paramètres cinétiques (mouvement)
 # ------------------
-velocity_magnitude_pop1 = 3
-ECART_TYPE_POP1 = 1
-NOISE_POP_1 = 0.5
+ # Test biochimie/diffusion seul : cellules immobiles.
+# Une fois les ondes validées, remettre les vitesses pour tester la motilité.
+velocity_magnitude_pop1 = 0.0
+ECART_TYPE_POP1 = 0.0
+NOISE_POP_1 = 0.0
 TAU_POP_1 = 5
-PERSISTENCE_POP1 = 0.4
+PERSISTENCE_POP1 = 0.0
 
-velocity_magnitude_pop2 = 1
-ECART_TYPE_POP2 = 0.5
-NOISE_POP_2 = 0.5
+velocity_magnitude_pop2 = 0.0
+ECART_TYPE_POP2 = 0.0
+NOISE_POP_2 = 0.0
 TAU_POP_2 = 5
-PERSISTENCE_POP2 = 0.4
+PERSISTENCE_POP2 = 0.0
 
 MIN_DISTANCE_INIT = 2 * R_EQ
 
@@ -321,6 +338,11 @@ class CellAgent:
         self.r_T = 1.0
         self.pde_production_level = 0.0
         self.last_cAMP = 0.0
+        self.f0_AC = 0.0   # activité basale éventuelle de l'AC
+        self.is_pioneer = False
+        self.A_pioneer = 0.0
+        self.pulse_active = False
+        self.pulse_timer = 0.0
 
 
 class Population:
@@ -515,6 +537,17 @@ def save_simulation_parameters(filename="simulation_parameters.txt"):
         f.write(f"hill_K_h = {hill_K_h}\n")
         f.write(f"cAMP_max = {cAMP_max}\n")
         f.write(f"K_relay = {K_relay}\n\n")
+        f.write(f"PIONEER_FRACTION = {PIONEER_FRACTION}\n")
+        f.write(f"PIONEER_A_INITIAL = {PIONEER_A_INITIAL}\n")
+        f.write(f"PIONEER_A_MIN = {PIONEER_A_MIN}\n")
+        f.write(f"PIONEER_A_MAX = {PIONEER_A_MAX}\n")
+        f.write(f"PIONEER_A_TRIGGER = {PIONEER_A_TRIGGER}\n")
+        f.write(f"PIONEER_A_RESET = {PIONEER_A_RESET}\n")
+        f.write(f"PIONEER_A_RECOVERY = {PIONEER_A_RECOVERY}\n")
+        f.write(f"PIONEER_PULSE_DURATION = {PIONEER_PULSE_DURATION}\n")
+        f.write(f"PIONEER_PULSE_STRENGTH = {PIONEER_PULSE_STRENGTH}\n")
+        f.write(f"F0_PIONEER_BASE = {F0_PIONEER_BASE}\n")
+        f.write(f"F0_RELAY_BASE = {F0_RELAY_BASE}\n\n")
 
         f.write(f"PACKING_FRACTION = {PACKING_FRACTION}\n")
         f.write(f"N_CELLS = {N_CELLS}\n")
@@ -554,6 +587,11 @@ def save_initial_state(cells, filename="initial_state.pkl"):
             'b': cell.b,
             'r_T': cell.r_T,
             'pop': cell.pop,
+            'f0_AC': cell.f0_AC,
+            'is_pioneer': cell.is_pioneer,
+            'A_pioneer': cell.A_pioneer,
+            'pulse_active': cell.pulse_active,
+            'pulse_timer': cell.pulse_timer,
         }
         for cell in cells
     ]
@@ -581,6 +619,11 @@ def load_initial_state(filename="initial_state.pkl"):
         cell.direction = torch.tensor(data['direction'], dtype=torch.float, device=device)
         cell.b = data['b']
         cell.r_T = data['r_T']
+        cell.f0_AC = data.get('f0_AC', 0.0)
+        cell.is_pioneer = data.get('is_pioneer', False)
+        cell.A_pioneer = data.get('A_pioneer', PIONEER_A_INITIAL if cell.is_pioneer else 0.0)
+        cell.pulse_active = data.get('pulse_active', False)
+        cell.pulse_timer = data.get('pulse_timer', 0.0)
         loaded_cells.append(cell)
     print(f"État initial chargé depuis '{filename}'")
     return loaded_cells
@@ -610,6 +653,11 @@ def save_snapshot(time, iteration, cells, camp_grid, pde_grid,
             "r_T": cell.r_T,
             "pop": cell.pop,
             "pde_production_level": cell.pde_production_level,
+            "f0_AC": cell.f0_AC,
+            "is_pioneer": cell.is_pioneer,
+            "A_pioneer": cell.A_pioneer,
+            "pulse_active": cell.pulse_active,
+            "pulse_timer": cell.pulse_timer,
         })
     path_file = os.path.join(path, filename)
     with open(path_file, "wb") as f:
@@ -647,6 +695,11 @@ def load_snapshot(path=GENERAL_PATH, filename="snapshot.pkl"):
         cell.b = cell_data["b"]
         cell.r_T = cell_data["r_T"]
         cell.pde_production_level = cell_data["pde_production_level"]
+        cell.f0_AC = cell_data.get("f0_AC", 0.0)
+        cell.is_pioneer = cell_data.get("is_pioneer", False)
+        cell.A_pioneer = cell_data.get("A_pioneer", PIONEER_A_INITIAL if cell.is_pioneer else 0.0)
+        cell.pulse_active = cell_data.get("pulse_active", False)
+        cell.pulse_timer = cell_data.get("pulse_timer", 0.0)
         cells.append(cell)
 
     print(f"Snapshot chargé depuis {filepath}")
@@ -674,8 +727,8 @@ def main():
 
         GRID_SIZE = int(np.ceil(SPACE_SIZE / GRID_RESOLUTION))
         # Les grilles camp_grid et pde_grid proviennent du snapshot — ne pas les réinitialiser
-        D_camp_eff = D_CAMP * GRID_RESOLUTION
-        D_pde_eff  = D_PDE  * GRID_RESOLUTION
+        D_camp_eff = D_CAMP / GRID_RESOLUTION**2  # formule correcte : D_phys/Δx² (laplacien en indices grille)
+        D_pde_eff  = D_PDE  / GRID_RESOLUTION**2
         output_path = PATH
         if not os.path.exists(output_path):
             os.makedirs(output_path)
@@ -719,28 +772,60 @@ def main():
             if save_new_initial_state:
                 save_initial_state(cells, GENERAL_PATH + "initial_state.pkl")
 
+        # ---- Initialisation biologique : état de famine ----
+        # Toutes les cellules partent du silence (b=0). Seules les pionnières (f0_AC>0)
+        # accumuleront du cAMP intracellulaire de façon constitutive et déclencheront la propagation.
+        # Avec K_relay=1e-4, C* = 1.2 nM. b_frac=0.005 créerait ~187 nM de fond >> C* → déclencherait
+        # toutes les cellules immédiatement. On part donc de b=0 pour toutes les non-pionnières.
+        rng_bio = np.random.default_rng(seed=0)
+        for cell in cells:
+            cell.b   = 0.0
+            cell.r_T = float(rng_bio.uniform(0.8, 1.0))  # sensibilité variable (hétérogénéité de famine)
+
+        # ---- Cellules pionnières : pacemakers autonomes discrets ----
+        # Elles ne sont plus des sources toniques continues.
+        # Leur variable A_pioneer monte lentement, déclenche un pulse court,
+        # puis redescend : repos -> pulse -> réfractaire -> récupération.
+        N_PIONEER = max(1, int(round(PIONEER_FRACTION * len(cells))))
+        N_PIONEER = min(N_PIONEER, len(cells))
+
+        rng_pio = np.random.default_rng(seed=42)
+        pioneer_indices = rng_pio.choice(len(cells), size=N_PIONEER, replace=False)
+
+        for cell in cells:
+            cell.f0_AC = F0_RELAY_BASE
+            cell.is_pioneer = False
+            cell.A_pioneer = 0.0
+            cell.pulse_active = False
+            cell.pulse_timer = 0.0
+
+        for idx in pioneer_indices:
+            cells[idx].is_pioneer = True
+            cells[idx].f0_AC = F0_PIONEER_BASE
+            # Initialisation de la configuration oscillante précédente :
+            # les pionnières ne sont pas toutes collées au seuil, ce qui évite un unique gros pic initial.
+            cells[idx].A_pioneer = float(rng_pio.uniform(PIONEER_A_INITIAL - 0.06, PIONEER_A_INITIAL + 0.03))
+            cells[idx].pulse_active = False
+            cells[idx].pulse_timer = 0.0
+            cells[idx].b = 0.0
+            cells[idx].r_T = float(rng_pio.uniform(0.8, 1.0))
+
+        print(f"Nombre de cellules placées = {len(cells)}")
+        print(f"Nombre de cellules pionnières = {N_PIONEER}")
+        print("IDs pionnières :", [cells[i].id for i in pioneer_indices[:20]])
+        print("A pionnières initiales :", [round(cells[i].A_pioneer, 3) for i in pioneer_indices[:20]])
+
         GRID_SIZE = int(np.ceil(SPACE_SIZE / GRID_RESOLUTION))
         print("GRID_SIZE =", GRID_SIZE)
-        D_camp_eff = D_CAMP * GRID_RESOLUTION
-        D_pde_eff  = D_PDE  * GRID_RESOLUTION
+        D_camp_eff = D_CAMP / GRID_RESOLUTION**2  # formule correcte : D_phys/Δx² (laplacien en indices grille)
+        D_pde_eff  = D_PDE  / GRID_RESOLUTION**2
 
-        # Initialiser au niveau basal analytique pour éviter une longue phase transitoire
-        # SS = rho_cell * rho * alpha0 / J  (valide avec production toutes les delta_t_prod)
-        rho_cell = N_CELLS / SPACE_SIZE**2
-        cAMP_basal_init = float(rho_cell * rho * alpha0 / J)
-        camp_grid = np.full((GRID_SIZE, GRID_SIZE), cAMP_basal_init, dtype=np.float32)
+        # Départ du silence absolu : cAMP=0 partout (rho=0, aucune production basale)
+        camp_grid = np.zeros((GRID_SIZE, GRID_SIZE), dtype=np.float32)
         pde_grid  = np.zeros((GRID_SIZE, GRID_SIZE), dtype=np.float32)
 
-        # Perturbation initiale (seed) pour amorcer une vague
-        # Sans cela, cAMP basal (0.3 nM) << hill_K_h (30 nM) : pas de nucléation spontanée
-        gx_arr, gy_arr = np.meshgrid(
-            np.arange(GRID_SIZE), np.arange(GRID_SIZE), indexing='ij')
-        cx_seed, cy_seed = GRID_SIZE // 2, GRID_SIZE // 2
-        sigma_seed = 15.0  # µm
-        cAMP_seed  = 50e-9  # 50 nM → dépasse hill_K_h = 30 nM, déclenche le relais
-        r2_seed    = (gx_arr - cx_seed)**2 + (gy_arr - cy_seed)**2
-        camp_grid  = (camp_grid + cAMP_seed * np.exp(-r2_seed / (2 * sigma_seed**2))).astype(np.float32)
-        del gx_arr, gy_arr, r2_seed
+        # Pas de seed séparé : les pacemakers démarrent eux-mêmes à t=0 et t=phase_i
+        # (évite le pré-armement des cellules par un seed indépendant)
 
         output_path = PATH
         if not os.path.exists(output_path):
@@ -777,6 +862,55 @@ def main():
     # Seuil de flush : dès qu'on a accumulé PLOT_INTERVAL pas de mouvement
     flush_threshold = PLOT_INTERVAL * len(cells)
 
+    # Tenseurs constants pour autovel vectorisé (invariants sur toute la simulation)
+    tau_t   = torch.tensor([c.tau   for c in cells], device=device, dtype=torch.float)  # (N,)
+    noise_t = torch.tensor([c.noise for c in cells], device=device, dtype=torch.float)  # (N,)
+
+    # --------------------------------------------------
+    # Pacemakers multiples : injection périodique de cAMP
+    # Plusieurs sources → fronts d'onde en anneau qui s'annihilent
+    # --------------------------------------------------
+    T_PACEMAKER    = 15.0   # min — période cible des vagues (conservé pour référence)
+    use_pacemaker  = False  # remplacé par les cellules pionnières avec f0_AC > 0
+    pacemaker_steps = int(round(T_PACEMAKER / DELTA_T))
+    sigma_pm = 25.0         # σ = 25 cases = 50 µm (rayon effectif ~100 µm)
+    cAMP_pm  = 50e-9        # amplitude minimale (50 nM ≈ 1.7× K_h) : kick discret, pas d'explosion
+
+    # Positions (en cases de grille) et phases initiales (en minutes)
+    # Centre + 3 spots répartis pour couvrir le domaine central
+    cx = GRID_SIZE // 2
+    q  = GRID_SIZE // 4
+    pacer_defs = [
+        (cx,       cx,       0.0),   # centre
+        (cx - q,   cx - q,   5.0),   # quart bas-gauche
+        (cx + q,   cx - q,  10.0),   # quart bas-droit
+        (cx,       cx + q,   3.0),   # quart haut-centre
+    ]
+
+    gx_pm, gy_pm = np.meshgrid(np.arange(GRID_SIZE), np.arange(GRID_SIZE), indexing='ij')
+    pacemaker_list = []
+    for (px, py, phase_min) in pacer_defs:
+        r2 = (gx_pm - px) ** 2 + (gy_pm - py) ** 2
+        grid  = (cAMP_pm * np.exp(-r2 / (2 * sigma_pm ** 2))).astype(np.float32)
+        phase_steps = int(round(phase_min / DELTA_T))
+        pacemaker_list.append((grid, phase_steps))
+    del gx_pm, gy_pm
+
+    # Variables pionnières / pacemaker par cellule
+    f0_arr = np.array([getattr(c, 'f0_AC', 0.0) for c in cells], dtype=np.float64)
+    is_pioneer_arr = np.array([getattr(c, 'is_pioneer', False) for c in cells], dtype=bool)
+    A_pioneer_arr = np.array([getattr(c, 'A_pioneer', 0.0) for c in cells], dtype=np.float64)
+    pulse_active_arr = np.array([getattr(c, 'pulse_active', False) for c in cells], dtype=bool)
+    pulse_timer_arr = np.array([getattr(c, 'pulse_timer', 0.0) for c in cells], dtype=np.float64)
+
+    # Diagnostics champ/réaction : permet de voir si la production dépasse encore la dégradation.
+    diagnostics_path = os.path.join(output_path, "field_diagnostics.csv")
+    diagnostics_header_written = os.path.exists(diagnostics_path)
+    last_camp_prod_rate_mean = 0.0
+    last_pde_prod_rate_mean = 0.0
+    last_camp_deg_rate_mean = 0.0
+    last_pde_decay_rate_mean = 0.0
+
     # ======================================================
     # Boucle principale
     # ======================================================
@@ -805,26 +939,25 @@ def main():
             cAMP_local_arr = camp_grid[xi, yi].astype(np.float64)
             PDE_local_arr  = pde_grid[xi,  yi].astype(np.float64)
 
-            # r_T de chaque cellule valide — couple la période réfractaire à la production
-            r_T_arr = np.array([c.r_T for c in cells], dtype=np.float64)[valid]
+            # (B3) Production extracellulaire couplée à b (cAMP intracellulaire) — modèle MG correct.
+            # Dans MG : sécrétion = k_t × b. On normalise par b_max = q_s/k_t (état stationnaire, F=1)
+            # pour que b/b_max ∈ [0,1] et que K_relay garde le même sens qu'avant.
+            # r_T est toujours mis à jour (step c) et influence b via F = r_T × Hill(cAMP).
+            b_arr_prod = np.array([c.b for c in cells], dtype=np.float64)[valid]
+            b_max      = q_s / k_t   # ≈ 7.5e-6 M
 
-            # Production de cAMP vectorisée
-            denom_camp = (hill_K_h ** hill_n) + (cAMP_local_arr ** hill_n)
-            feedback   = np.where(denom_camp > 0,
-                                  cAMP_local_arr ** hill_n / denom_camp, 0.0)
             inhibition = np.where(
                 PDE_local_arr > 0,
                 1.0 / (1.0 + (PDE_local_arr / PDE_inhibition_threshold) ** 2),
                 1.0
             )
-            # K_relay × r_T × feedback : production de relais modulée par l'état des récepteurs
-            # → r_T ≈ 1 au repos, r_T ≈ 0.1 après une vague (période réfractaire)
-            # Facteur delta_t_prod : production = taux (M/min) × intervalle de temps (min)
-            # Correct car cette ligne s'exécute toutes les ratio_prod itérations = toutes les delta_t_prod min
-            cAMP_brut_arr = (rho * alpha0 + K_relay * r_T_arr * feedback * inhibition) * delta_t_prod / (GRID_RESOLUTION ** 2)
+            # En 2D, la production est déposée sur une surface de grille.
+            # On conserve donc l'échelle surfacique utilisée avant la dérive des paramètres.
+            cAMP_brut_arr = (rho * alpha0 + K_relay * (b_arr_prod / b_max) * inhibition) * delta_t_prod / (GRID_RESOLUTION ** 2)
 
             # Production de PDE vectorisée — même raisonnement : taux × delta_t_prod
             # Bug corrigé : sans ce facteur dt, la PDE s'accumule ~200× trop vite
+            # En 2D, la production de PDE est elle aussi déposée sur une surface de grille.
             denom_pde = PDE_threshold ** hill_n_PDE + cAMP_local_arr ** hill_n_PDE
             PDE_brut_arr = np.where(
                 denom_pde > 0,
@@ -843,6 +976,9 @@ def main():
                     np.add.at(cAMP_production_grid, (nx, ny), cAMP_brut_arr * w)
                     np.add.at(PDE_production_grid,  (nx, ny), PDE_brut_arr  * w)
 
+            last_camp_prod_rate_mean = float(cAMP_production_grid.mean() / delta_t_prod)
+            last_pde_prod_rate_mean = float(PDE_production_grid.mean() / delta_t_prod)
+
             camp_grid = (camp_grid + cAMP_production_grid).astype(np.float32)
             pde_grid  = (pde_grid  + PDE_production_grid).astype(np.float32)
 
@@ -852,25 +988,97 @@ def main():
         camp_grid = diffuse_np(camp_grid, D_camp_eff, DELTA_T)
         pde_grid  = diffuse_np(pde_grid,  D_pde_eff,  DELTA_T)
 
-        k_PDE_adjusted = k_PDE / GRID_RESOLUTION
-        camp_grid -= (J * camp_grid + k_PDE_adjusted * pde_grid * camp_grid) * DELTA_T
+        cAMP_degradation_rate_grid = J * camp_grid + k_PDE * pde_grid * camp_grid
+        PDE_decay_rate_grid = PDE_decay * pde_grid
+        last_camp_deg_rate_mean = float(cAMP_degradation_rate_grid.mean())
+        last_pde_decay_rate_mean = float(PDE_decay_rate_grid.mean())
+
+        camp_grid -= cAMP_degradation_rate_grid * DELTA_T
         # La PDE est une enzyme catalytique : elle N'EST PAS consommée en dégradant le cAMP.
         # Seul la dégradation basale (PDE_decay) la diminue.
-        pde_grid  -= PDE_decay * pde_grid * DELTA_T
+        pde_grid  -= PDE_decay_rate_grid * DELTA_T
 
         camp_grid = np.clip(camp_grid, 0, None)
         pde_grid  = np.clip(pde_grid,  0, None)
 
+        # Pacemakers : injection périodique depuis t=0 (cellules pionnières — oscillateurs naturels)
+        if use_pacemaker:
+            for pm_grid, pm_phase in pacemaker_list:
+                shifted = iteration - pm_phase
+                if shifted >= 0 and shifted % pacemaker_steps == 0:
+                    camp_grid = np.clip(camp_grid + pm_grid, 0, None).astype(np.float32)
+
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        # (c) Mise à jour état interne MG (paramètres passés explicitement)
+        # (c) Mise à jour état interne MG — vectorisée NumPy (P1)
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        for cell in cells:
-            x_idx = int(cell.position[0].item() // GRID_RESOLUTION)
-            y_idx = int(cell.position[1].item() // GRID_RESOLUTION)
-            if 0 <= x_idx < GRID_SIZE and 0 <= y_idx < GRID_SIZE:
-                local_cAMP = float(camp_grid[x_idx, y_idx])
-                update_cell_MG(cell, local_cAMP, q_s, k_t,
-                               F1_base, F2_base, K_h, N_HILL, DELTA_T)
+        pos_np_mg = positions.cpu().numpy()
+        xi_mg = np.clip((pos_np_mg[:, 0] / GRID_RESOLUTION).astype(int), 0, GRID_SIZE - 1)
+        yi_mg = np.clip((pos_np_mg[:, 1] / GRID_RESOLUTION).astype(int), 0, GRID_SIZE - 1)
+        cAMP_mg = camp_grid[xi_mg, yi_mg].astype(np.float64)     # (N,)
+
+        r_T_mg = np.array([c.r_T for c in cells], dtype=np.float64)  # (N,)
+        b_mg   = np.array([c.b   for c in cells], dtype=np.float64)  # (N,)
+
+        # --- Pioneer pulse model ---
+        # Les tableaux sont créés une fois avant la boucle.
+        # Important : les pionnières sont identifiées par is_pioneer, pas par f0_AC,
+        # car elles n'ont plus de source tonique continue.
+
+        cAMP_pos  = np.maximum(cAMP_mg, 0.0)
+        # Désensibilisation coopérative N_HILL=4 (validé 0D) : switch plus brutal → réfractaire plus net
+        f1_eff = F1_base * cAMP_pos**N_HILL / (K_h**N_HILL + cAMP_pos**N_HILL + 1e-60)
+        # F = r_T × [pulse_pioneer + f0 + (1-f0) × Hill(cAMP)]
+        # Les relais ont f0=0 et ne répondent qu'au cAMP local.
+        # Les pionnières déclenchent un pulse autonome discret via A_pioneer.
+        hill_frac = cAMP_pos ** N_HILL / (K_h ** N_HILL + cAMP_pos ** N_HILL + 1e-60)
+
+        can_trigger = (
+            is_pioneer_arr
+            & (~pulse_active_arr)
+            & (A_pioneer_arr >= PIONEER_A_TRIGGER)
+            & (r_T_mg > 0.8)
+            & (hill_frac < 0.2)
+        )
+        pulse_active_arr[can_trigger] = True
+        pulse_timer_arr[can_trigger] = PIONEER_PULSE_DURATION
+        A_pioneer_arr[can_trigger] = PIONEER_A_RESET
+
+        pacemaker_drive = np.zeros_like(cAMP_pos)
+        pacemaker_drive[pulse_active_arr] = PIONEER_PULSE_STRENGTH
+
+        pulse_timer_arr[pulse_active_arr] -= DELTA_T
+        ended_pulses = pulse_active_arr & (pulse_timer_arr <= 0.0)
+        pulse_active_arr[ended_pulses] = False
+        pulse_timer_arr[ended_pulses] = 0.0
+
+        activation = f0_arr + pacemaker_drive + (1.0 - f0_arr) * hill_frac
+        activation = np.minimum(activation, 1.0)
+        F_val = r_T_mg * activation
+
+        dr_T = -f1_eff * r_T_mg + F2_base * (1.0 - r_T_mg)
+        db   = q_s * F_val - k_t * b_mg
+
+        recovery_drive = r_T_mg * (1.0 - hill_frac)
+        dA_pioneer = np.zeros_like(A_pioneer_arr)
+        recovering_pioneers = is_pioneer_arr & (~pulse_active_arr)
+        dA_pioneer[recovering_pioneers] = (
+            PIONEER_A_RECOVERY
+            * recovery_drive[recovering_pioneers]
+            * (PIONEER_A_MAX - A_pioneer_arr[recovering_pioneers])
+        )
+
+        r_T_mg = np.clip(r_T_mg + dr_T * DELTA_T, 0.0, 1.0)
+        b_mg   = np.maximum(b_mg + db * DELTA_T, 0.0)
+        A_pioneer_arr = np.clip(A_pioneer_arr + dA_pioneer * DELTA_T, PIONEER_A_MIN, PIONEER_A_MAX)
+        A_pioneer_arr[~is_pioneer_arr] = 0.0
+
+        # Update attributes for optional snapshots/debugging
+        for i, cell in enumerate(cells):
+            cell.r_T = r_T_mg[i]
+            cell.b   = b_mg[i]
+            cell.A_pioneer = A_pioneer_arr[i]
+            cell.pulse_active = bool(pulse_active_arr[i])
+            cell.pulse_timer = float(pulse_timer_arr[i])
 
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         # (d) Mouvement (forces + chimiotaxie)
@@ -895,64 +1103,84 @@ def main():
             # Gradient cAMP — calculé une seule fois par pas de mouvement
             grad_x_np, grad_y_np = np.gradient(camp_grid.T, GRID_RESOLUTION)
 
+            # --- Autovel + chimiotaxie vectorisés (P1) ---
+            pos_np_mv  = positions.cpu().numpy()
+            x_idx_arr  = np.clip((pos_np_mv[:, 0] / GRID_RESOLUTION).astype(int), 0, GRID_SIZE - 1)
+            y_idx_arr  = np.clip((pos_np_mv[:, 1] / GRID_RESOLUTION).astype(int), 0, GRID_SIZE - 1)
+
+            local_cAMP_mv = camp_grid[x_idx_arr, y_idx_arr].astype(np.float64)  # (N,)
+            grad_x_cell   = grad_x_np[x_idx_arr, y_idx_arr]                     # (N,)
+            grad_y_cell   = grad_y_np[x_idx_arr, y_idx_arr]                     # (N,)
+
+            # Direction chimiotactique (gradient normalisé)
+            norm_g    = np.sqrt(grad_x_cell**2 + grad_y_cell**2)
+            has_grad  = norm_g > 0
+            chem_dir_np = np.zeros((len(cells), 2))
+            chem_dir_np[has_grad, 0] = grad_x_cell[has_grad] / norm_g[has_grad]
+            chem_dir_np[has_grad, 1] = grad_y_cell[has_grad] / norm_g[has_grad]
+            chem_dir_t = torch.tensor(chem_dir_np, device=device, dtype=torch.float)  # (N,2)
+
+            # Sensibilité M2 (N,1)
+            S_t = torch.tensor(
+                CHI_CHEMO / (1.0 + ALPHA_CHEMO * local_cAMP_mv) ** 2,
+                device=device, dtype=torch.float
+            ).unsqueeze(1)
+
+            # Dérivée temporelle du cAMP — (B4) utilise delta_t_mvt, pas DELTA_T
+            last_cAMP_arr  = np.array([c.last_cAMP for c in cells])
+            cAMP_deriv_arr = (local_cAMP_mv - last_cAMP_arr) / delta_t_mvt      # (N,)
+            cAMP_deriv_t   = torch.tensor(
+                cAMP_deriv_arr, device=device, dtype=torch.float
+            ).unsqueeze(1)  # (N,1)
+
+            # Batch autovel : θ + correction persistance + bruit
+            dX_norm  = torch.nn.functional.normalize(displacement, dim=1) * 0.9999999
+            theta    = torch.atan2(dX_norm[:, 1], dX_norm[:, 0])
+            cross    = torch.clamp(
+                directions[:, 0] * dX_norm[:, 1] - directions[:, 1] * dX_norm[:, 0],
+                -0.9999999, 0.9999999
+            )
+            dtheta   = torch.arcsin(cross) * DELTA_T / tau_t
+            rnd      = (2.0 * math.pi * (torch.rand(len(cells), device=device) - 0.5)) \
+                       * noise_t * math.sqrt(DELTA_T)
+            th_new   = theta + dtheta + rnd
+            auto_dirs = torch.stack([torch.cos(th_new), torch.sin(th_new)], dim=1)  # (N,2)
+
+            # Chimiotaxie (active seulement au-dessus du seuil)
+            above_thresh = torch.tensor(
+                local_cAMP_mv > MIN_CAMP_SENSITIVITY, device=device, dtype=torch.float
+            ).unsqueeze(1)
+            deriv_pos  = torch.tensor(cAMP_deriv_arr > 0, device=device, dtype=torch.float).unsqueeze(1)
+            deriv_term = BETA_CHEMO_DERIV * cAMP_deriv_t * (chem_dir_t * deriv_pos)  # (N,2)
+            chemo_term = LAMBDA_CHEMO * S_t * chem_dir_t + deriv_term                # (N,2)
+            combined   = auto_dirs + above_thresh * chemo_term                        # (N,2)
+
+            norm_comb  = torch.norm(combined, dim=1, keepdim=True)
+            directions = torch.where(
+                norm_comb > 0,
+                torch.nn.functional.normalize(combined, dim=1),
+                auto_dirs
+            )  # (N,2)
+
+            # Write-back + logging fusionnés — une seule boucle (P1)
             for i, cell in enumerate(cells):
-                cell.position = positions[i]
-
-                auto_dir = autovel(
-                    displacement[i].unsqueeze(0),
-                    cell.direction.unsqueeze(0),
-                    cell.tau, cell.noise, DELTA_T
-                ).squeeze(0)
-
-                x_idx = min(max(int(cell.position[0].item() // GRID_RESOLUTION), 0), GRID_SIZE - 1)
-                y_idx = min(max(int(cell.position[1].item() // GRID_RESOLUTION), 0), GRID_SIZE - 1)
-
-                local_cAMP = float(camp_grid[x_idx, y_idx])
-                cAMP_deriv = (local_cAMP - cell.last_cAMP) / DELTA_T
-                cell.last_cAMP = local_cAMP
-
-                # Sensibilité spatiale M2
-                S = CHI_CHEMO / (1 + ALPHA_CHEMO * local_cAMP) ** 2
-
-                # Direction du gradient de cAMP
-                grad_vec  = np.array([grad_x_np[x_idx, y_idx], grad_y_np[x_idx, y_idx]])
-                norm_grad = np.linalg.norm(grad_vec)
-                chemotactic_direction = grad_vec / norm_grad if norm_grad > 0 else np.zeros(2)
-                chemotactic_dir_t = torch.tensor(
-                    chemotactic_direction, device=device, dtype=torch.float
-                )
-
-                # Chimiotaxie activée seulement quand la concentration dépasse le seuil
-                if local_cAMP <= MIN_CAMP_SENSITIVITY:
-                    combined = auto_dir
-                else:
-                    deriv_direction = chemotactic_dir_t if cAMP_deriv > 0 else torch.zeros(2, device=device)
-                    deriv_term = BETA_CHEMO_DERIV * cAMP_deriv * deriv_direction
-                    combined = auto_dir + LAMBDA_CHEMO * S * chemotactic_dir_t + deriv_term
-
-                if torch.norm(combined) > 0:
-                    cell.direction = torch.nn.functional.normalize(
-                        combined.unsqueeze(0), dim=1
-                    ).squeeze(0)
-                else:
-                    cell.direction = auto_dir
-
-            # Synchroniser le tenseur directions avec les directions individuelles
-            directions = torch.stack([c.direction for c in cells])
-
-            # Logging
-            for cell in cells:
+                cell.position  = positions[i]
+                cell.direction = directions[i]
+                cell.last_cAMP = local_cAMP_mv[i]
                 data_log.append({
-                    'frame':    iteration,
-                    'time':     time,
-                    'cell_id':  cell.id,
-                    'pop_tag':  cell.pop,
-                    'x':        cell.position[0].item(),
-                    'y':        cell.position[1].item(),
-                    'dir_x':    cell.direction[0].item(),
-                    'dir_y':    cell.direction[1].item(),
-                    'b':        cell.b,
-                    'r_T':      cell.r_T,
+                    'frame':   iteration,
+                    'time':    time,
+                    'cell_id': cell.id,
+                    'pop_tag': cell.pop,
+                    'x':       cell.position[0].item(),
+                    'y':       cell.position[1].item(),
+                    'dir_x':   cell.direction[0].item(),
+                    'dir_y':   cell.direction[1].item(),
+                    'b':       cell.b,
+                    'r_T':     cell.r_T,
+                    'is_pioneer': cell.is_pioneer,
+                    'A_pioneer': cell.A_pioneer,
+                    'pulse_active': cell.pulse_active,
                 })
 
             # Flush périodique du CSV pour éviter l'accumulation en RAM
@@ -962,6 +1190,75 @@ def main():
                                   header=not csv_header_written, index=False)
                 csv_header_written = True
                 data_log = []
+
+        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        # Diagnostics réaction/diffusion
+        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        if iteration % PLOT_INTERVAL == 0:
+            pos_np_diag = positions.cpu().numpy()
+            xi_diag = np.clip((pos_np_diag[:, 0] / GRID_RESOLUTION).astype(int), 0, GRID_SIZE - 1)
+            yi_diag = np.clip((pos_np_diag[:, 1] / GRID_RESOLUTION).astype(int), 0, GRID_SIZE - 1)
+            camp_at_cells = camp_grid[xi_diag, yi_diag].astype(np.float64)
+            pde_at_cells = pde_grid[xi_diag, yi_diag].astype(np.float64)
+            b_diag = np.array([c.b for c in cells], dtype=np.float64)
+            r_T_diag = np.array([c.r_T for c in cells], dtype=np.float64)
+            b_frac_diag = b_diag / (q_s / k_t)
+            inhibition_diag = np.where(
+                pde_at_cells > 0,
+                1.0 / (1.0 + (pde_at_cells / PDE_inhibition_threshold) ** 2),
+                1.0
+            )
+            prod_deg_ratio = last_camp_prod_rate_mean / (last_camp_deg_rate_mean + 1e-300)
+
+            diagnostics_row = {
+                "frame": iteration,
+                "time": time,
+                "camp_mean": float(camp_grid.mean()),
+                "camp_max": float(camp_grid.max()),
+                "camp_cells_mean": float(camp_at_cells.mean()),
+                "camp_cells_max": float(camp_at_cells.max()),
+                "pde_mean": float(pde_grid.mean()),
+                "pde_max": float(pde_grid.max()),
+                "pde_cells_mean": float(pde_at_cells.mean()),
+                "pde_cells_max": float(pde_at_cells.max()),
+                "camp_prod_rate_mean": last_camp_prod_rate_mean,
+                "camp_deg_rate_mean": last_camp_deg_rate_mean,
+                "camp_prod_deg_ratio": float(prod_deg_ratio),
+                "pde_prod_rate_mean": last_pde_prod_rate_mean,
+                "pde_decay_rate_mean": last_pde_decay_rate_mean,
+                "b_frac_mean": float(b_frac_diag.mean()),
+                "b_frac_max": float(b_frac_diag.max()),
+                "r_T_mean": float(r_T_diag.mean()),
+                "r_T_min": float(r_T_diag.min()),
+                "pde_inhibition_mean": float(inhibition_diag.mean()),
+                "frac_cells_camp_gt_K_h": float(np.mean(camp_at_cells > K_h)),
+                "frac_grid_camp_gt_K_h": float(np.mean(camp_grid > K_h)),
+                "frac_grid_camp_gt_PDE_threshold": float(np.mean(camp_grid > PDE_threshold)),
+                "n_active_pioneer_pulses": int(np.sum(pulse_active_arr)),
+                "A_pioneer_mean": float(A_pioneer_arr[is_pioneer_arr].mean()) if np.any(is_pioneer_arr) else 0.0,
+                "A_pioneer_max": float(A_pioneer_arr[is_pioneer_arr].max()) if np.any(is_pioneer_arr) else 0.0,
+                "n_pioneer_cells": int(np.sum(is_pioneer_arr)),
+            }
+            pd.DataFrame([diagnostics_row]).to_csv(
+                diagnostics_path,
+                mode='a',
+                header=not diagnostics_header_written,
+                index=False
+            )
+            diagnostics_header_written = True
+            print(
+                "DIAG "
+                f"t={time:.2f} min | "
+                f"cAMP_mean={diagnostics_row['camp_mean'] * 1e9:.2f} nM | "
+                f"cAMP_max={diagnostics_row['camp_max'] * 1e9:.2f} nM | "
+                f"PDE_mean={diagnostics_row['pde_mean']:.2e} | "
+                f"prod/deg={prod_deg_ratio:.3g} | "
+                f"b/bmax={diagnostics_row['b_frac_mean']:.3g} | "
+                f"r_T={diagnostics_row['r_T_mean']:.3g} | "
+                f"pulses={diagnostics_row['n_active_pioneer_pulses']} | "
+                f"Npioneer={diagnostics_row['n_pioneer_cells']} | "
+                f"Amax={diagnostics_row['A_pioneer_max']:.2f}"
+            )
 
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         # Visualisation périodique
