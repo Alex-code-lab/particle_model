@@ -109,14 +109,14 @@ cAMP_max = 1e-6
 # Gain du relais : amplitude maximale de production induite (M/min par cellule par µm²)
 # Remplace l'implicite "1.0 M/min" qui était hors échelle.
 # Cible : pic de vague ≈ 300 nM → K_relay = cAMP_pic × J / densité_cellulaire
-K_relay = 3.0e-5   # gain relais 2D restauré : le gain 1D était trop fort une fois déposé sur une grille 2D
+K_relay = 8.0e-5   # gain relais : fenêtre [6.4e-5, 1.2e-4] pour propagation sans faux état stationnaire
 
 # ------------------
 # Paramètres pour la production de PDE
 # ------------------
 hill_n_PDE = 2
 PDE_rate = 0.004       # production PDE modérée : évite de bloquer immédiatement le relais
-PDE_threshold = 8e-8  # 30 nM — proche du seuil d'activation récepteur
+PDE_threshold = 3e-8  # = K_h : PDE co-activée au seuil récepteur, favorise l'oscillation
 PDE_decay = 0.12       # valeur de la configuration oscillante précédente
 
 # Cellules pionnières / pacemaker de famine
@@ -471,7 +471,7 @@ def plot_cells_and_fields(cells, camp_grid, pde_grid, iteration, time_now,
     ax2.set_aspect('equal')
     PDE_img = ax2.imshow(
         pde_grid.T, origin='lower', extent=extent,
-        cmap='plasma', vmin=0, vmax=1e-6
+        cmap='plasma', vmin=0, vmax=1e-4
     )
     plt.colorbar(PDE_img, ax=ax2, shrink=0.8)
 
@@ -1051,9 +1051,12 @@ def main():
         pulse_active_arr[ended_pulses] = False
         pulse_timer_arr[ended_pulses] = 0.0
 
-        activation = f0_arr + pacemaker_drive + (1.0 - f0_arr) * hill_frac
-        activation = np.minimum(activation, 1.0)
-        F_val = r_T_mg * activation
+        relay_activation = f0_arr + (1.0 - f0_arr) * hill_frac
+        relay_activation = np.minimum(relay_activation, 1.0)
+        F_val = r_T_mg * relay_activation
+        # Pendant le pulse pioneer, l'oscillateur interne drive b directement,
+        # indépendamment de r_T (le pacemaker n'a pas besoin de récepteurs actifs).
+        F_val = np.where(pulse_active_arr, np.maximum(F_val, PIONEER_PULSE_STRENGTH), F_val)
 
         dr_T = -f1_eff * r_T_mg + F2_base * (1.0 - r_T_mg)
         db   = q_s * F_val - k_t * b_mg
