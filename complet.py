@@ -110,6 +110,7 @@ cAMP_max = 1e-6
 # Remplace l'implicite "1.0 M/min" qui était hors échelle.
 # Cible : pic de vague ≈ 300 nM → K_relay = cAMP_pic × J / densité_cellulaire
 K_relay = 8.0e-5   # gain relais : fenêtre [6.4e-5, 1.2e-4] pour propagation sans faux état stationnaire
+CAMP_EMISSION_B_FRAC_THRESHOLD = 0.05  # affichage : cellule considérée émettrice si b/bmax >= 5 %
 
 # ------------------
 # Paramètres pour la production de PDE
@@ -461,12 +462,31 @@ def plot_cells_and_fields(cells, camp_grid, pde_grid, iteration, time_now,
     xvals_pop2 = [c.position[0].item() for c in cells if c.pop == "Population 2"]
     yvals_pop2 = [c.position[1].item() for c in cells if c.pop == "Population 2"]
 
-    ax.scatter(xvals_pop1, yvals_pop1, s=10, color='blue', alpha=0.6, label="Population 1")
-    ax.scatter(xvals_pop2, yvals_pop2, s=10, color='red',  alpha=0.6, label="Population 2")
+    b_max = q_s / k_t
+    emission_label_added = False
+    for cell in cells:
+        b_frac = cell.b / b_max if b_max > 0 else 0.0
+        emits_camp = cell.pulse_active or (b_frac >= CAMP_EMISSION_B_FRAC_THRESHOLD)
+        if emits_camp:
+            emission_patch = patches.Circle(
+                (cell.position[0].item(), cell.position[1].item()),
+                R_EQ,
+                facecolor='limegreen',
+                edgecolor='none',
+                alpha=0.25,
+                label="Émission cAMP" if not emission_label_added else None,
+                zorder=1,
+            )
+            ax.add_patch(emission_patch)
+            emission_label_added = True
+
+    ax.scatter(xvals_pop1, yvals_pop1, s=10, color='blue', alpha=0.6, label="Population 1", zorder=3)
+    ax.scatter(xvals_pop2, yvals_pop2, s=10, color='red',  alpha=0.6, label="Population 2", zorder=3)
     for cell in cells:
         circle = patches.Circle(
             (cell.position[0].item(), cell.position[1].item()),
-            R_EQ, fill=False, edgecolor='black', linestyle='dotted', alpha=0.5
+            R_EQ, fill=False, edgecolor='black', linestyle='dotted', alpha=0.5,
+            zorder=4,
         )
         ax.add_patch(circle)
     ax.legend()
@@ -552,7 +572,8 @@ def save_simulation_parameters(filename="simulation_parameters.txt"):
         f.write(f"hill_n = {hill_n}\n")
         f.write(f"hill_K_h = {hill_K_h}\n")
         f.write(f"cAMP_max = {cAMP_max}\n")
-        f.write(f"K_relay = {K_relay}\n\n")
+        f.write(f"K_relay = {K_relay}\n")
+        f.write(f"CAMP_EMISSION_B_FRAC_THRESHOLD = {CAMP_EMISSION_B_FRAC_THRESHOLD}\n\n")
         f.write(f"PIONEER_FRACTION = {PIONEER_FRACTION}\n")
         f.write(f"PIONEER_A_INITIAL = {PIONEER_A_INITIAL}\n")
         f.write(f"PIONEER_A_MIN = {PIONEER_A_MIN}\n")
@@ -834,6 +855,8 @@ def main():
             cell.A_pioneer = 0.0
             cell.pulse_active = False
             cell.pulse_timer = 0.0
+            cell.relay_activated = False
+            cell.A_relay = 0.0
 
         for idx in pioneer_indices:
             cells[idx].is_pioneer = True
@@ -845,6 +868,8 @@ def main():
             cells[idx].pulse_timer = 0.0
             cells[idx].b = 0.0
             cells[idx].r_T = float(rng_pio.uniform(0.8, 1.0))
+            cells[idx].relay_activated = False
+            cells[idx].A_relay = 0.0
 
         print(f"Nombre de cellules placées = {len(cells)}")
         print(f"Nombre de cellules pionnières = {N_PIONEER}")
@@ -938,6 +963,10 @@ def main():
     A_pioneer_arr = np.array([getattr(c, 'A_pioneer', 0.0) for c in cells], dtype=np.float64)
     pulse_active_arr = np.array([getattr(c, 'pulse_active', False) for c in cells], dtype=bool)
     pulse_timer_arr = np.array([getattr(c, 'pulse_timer', 0.0) for c in cells], dtype=np.float64)
+    relay_activated_arr = np.array([getattr(c, 'relay_activated', False) for c in cells], dtype=bool)
+    A_relay_arr = np.array([getattr(c, 'A_relay', 0.0) for c in cells], dtype=np.float64)
+    relay_activated_arr[is_pioneer_arr] = False
+    A_relay_arr[is_pioneer_arr] = 0.0
 
     # Diagnostics champ/réaction : permet de voir si la production dépasse encore la dégradation.
     diagnostics_path = os.path.join(output_path, "field_diagnostics.csv")
@@ -980,7 +1009,7 @@ def main():
             # pour que b/b_max ∈ [0,1] et que K_relay garde le même sens qu'avant.
             # r_T est toujours mis à jour (step c) et influence b via F = r_T × Hill(cAMP).
             b_arr_prod = np.array([c.b for c in cells], dtype=np.float64)[valid]
-            b_max      = q_s / k_t   # ≈ 7.5e-6 M
+            b_max      = q_s / k_t
 
             inhibition = np.where(
                 PDE_local_arr > 0,
@@ -989,7 +1018,7 @@ def main():
             )
             # En 2D, la production est déposée sur une surface de grille.
             # On conserve donc l'échelle surfacique utilisée avant la dérive des paramètres.
-            cAMP_brut_arr = (rho * alpha0 + K_relay * (b_arr_prod / b_max)) * delta_t_prod / (GRID_RESOLUTION ** 2)
+            cAMP_brut_arr = (rho * alpha0 + K_relay * (b_arr_prod / b_max) * inhibition) * delta_t_prod / (GRID_RESOLUTION ** 2)
 
             # Production de PDE vectorisée — même raisonnement : taux × delta_t_prod
             # Bug corrigé : sans ce facteur dt, la PDE s'accumule ~200× trop vite
@@ -1051,11 +1080,12 @@ def main():
         xi_mg = np.clip((pos_np_mg[:, 0] / GRID_RESOLUTION).astype(int), 0, GRID_SIZE - 1)
         yi_mg = np.clip((pos_np_mg[:, 1] / GRID_RESOLUTION).astype(int), 0, GRID_SIZE - 1)
         cAMP_mg = camp_grid[xi_mg, yi_mg].astype(np.float64)     # (N,)
+        PDE_mg  = pde_grid[xi_mg, yi_mg].astype(np.float64)      # (N,)
 
         r_T_mg = np.array([c.r_T for c in cells], dtype=np.float64)  # (N,)
         b_mg   = np.array([c.b   for c in cells], dtype=np.float64)  # (N,)
 
-        # --- Pioneer pulse model ---
+        # --- Modèles de pulse : pionnières autonomes et relais activés ---
         # Les tableaux sont créés une fois avant la boucle.
         # Important : les pionnières sont identifiées par is_pioneer, pas par f0_AC,
         # car elles n'ont plus de source tonique continue.
@@ -1063,24 +1093,48 @@ def main():
         cAMP_pos  = np.maximum(cAMP_mg, 0.0)
         # Désensibilisation coopérative N_HILL=4 (validé 0D) : switch plus brutal → réfractaire plus net
         f1_eff = F1_base * cAMP_pos**N_HILL / (K_h**N_HILL + cAMP_pos**N_HILL + 1e-60)
-        # F = r_T × [pulse_pioneer + f0 + (1-f0) × Hill(cAMP)]
-        # Les relais ont f0=0 et ne répondent qu'au cAMP local.
-        # Les pionnières déclenchent un pulse autonome discret via A_pioneer.
+        # F = r_T × [pulse + f0 + (1-f0) × Hill(cAMP)]
+        # Les relais deviennent des oscillateurs excités après un premier seuil cAMP.
         hill_frac = cAMP_pos ** N_HILL / (K_h ** N_HILL + cAMP_pos ** N_HILL + 1e-60)
 
-        can_trigger = (
+        pioneer_trigger = (
             is_pioneer_arr
             & (~pulse_active_arr)
             & (A_pioneer_arr >= PIONEER_A_TRIGGER)
             & (r_T_mg > 0.8)
             & (hill_frac < 0.2)
         )
-        pulse_active_arr[can_trigger] = True
-        pulse_timer_arr[can_trigger] = PIONEER_PULSE_DURATION
-        A_pioneer_arr[can_trigger] = PIONEER_A_RESET
+        pulse_active_arr[pioneer_trigger] = True
+        pulse_timer_arr[pioneer_trigger] = PIONEER_PULSE_DURATION
+        A_pioneer_arr[pioneer_trigger] = PIONEER_A_RESET
 
-        pacemaker_drive = np.zeros_like(cAMP_pos)
-        pacemaker_drive[pulse_active_arr] = PIONEER_PULSE_STRENGTH
+        relay_cells = ~is_pioneer_arr
+        first_relay_trigger = (
+            relay_cells
+            & (~relay_activated_arr)
+            & (~pulse_active_arr)
+            & (cAMP_pos >= RELAY_CAMP_TRIGGER)
+        )
+        relay_activated_arr[first_relay_trigger] = True
+        pulse_active_arr[first_relay_trigger] = True
+        pulse_timer_arr[first_relay_trigger] = RELAY_PULSE_DURATION
+        A_relay_arr[first_relay_trigger] = RELAY_A_RESET
+
+        low_signal = (cAMP_pos <= RELAY_REARM_CAMP) & (PDE_mg <= RELAY_REARM_PDE)
+        relay_ready = relay_cells & relay_activated_arr & (~pulse_active_arr) & low_signal
+        relay_retrigger = (
+            relay_ready
+            & (A_relay_arr >= RELAY_A_TRIGGER)
+            & (r_T_mg >= RELAY_RT_RETRIGGER)
+        )
+        pulse_active_arr[relay_retrigger] = True
+        pulse_timer_arr[relay_retrigger] = RELAY_PULSE_DURATION
+        A_relay_arr[relay_retrigger] = RELAY_A_RESET
+        relay_recovering = relay_ready & (~relay_retrigger)
+
+        pulse_drive = np.zeros_like(cAMP_pos)
+        pulse_drive[pulse_active_arr & is_pioneer_arr] = PIONEER_PULSE_STRENGTH
+        pulse_drive[pulse_active_arr & relay_cells & relay_activated_arr] = RELAY_PULSE_STRENGTH
 
         pulse_timer_arr[pulse_active_arr] -= DELTA_T
         ended_pulses = pulse_active_arr & (pulse_timer_arr <= 0.0)
@@ -1090,9 +1144,9 @@ def main():
         relay_activation = f0_arr + (1.0 - f0_arr) * hill_frac
         relay_activation = np.minimum(relay_activation, 1.0)
         F_val = r_T_mg * relay_activation
-        # Pendant le pulse pioneer, l'oscillateur interne drive b directement,
-        # indépendamment de r_T (le pacemaker n'a pas besoin de récepteurs actifs).
-        F_val = np.where(pulse_active_arr, np.maximum(F_val, PIONEER_PULSE_STRENGTH), F_val)
+        # Pendant un pulse, l'oscillateur interne drive b directement,
+        # indépendamment de r_T. La PDE et le cAMP élevés bloquent ensuite le réarmement.
+        F_val = np.maximum(F_val, pulse_drive)
 
         dr_T = -f1_eff * r_T_mg + F2_base * (1.0 - r_T_mg)
         db   = q_s * F_val - k_t * b_mg
@@ -1105,11 +1159,20 @@ def main():
             * recovery_drive[recovering_pioneers]
             * (PIONEER_A_MAX - A_pioneer_arr[recovering_pioneers])
         )
+        dA_relay = np.zeros_like(A_relay_arr)
+        dA_relay[relay_recovering] = (
+            RELAY_A_RECOVERY
+            * recovery_drive[relay_recovering]
+            * (RELAY_A_MAX - A_relay_arr[relay_recovering])
+        )
 
         r_T_mg = np.clip(r_T_mg + dr_T * DELTA_T, 0.0, 1.0)
         b_mg   = np.maximum(b_mg + db * DELTA_T, 0.0)
         A_pioneer_arr = np.clip(A_pioneer_arr + dA_pioneer * DELTA_T, PIONEER_A_MIN, PIONEER_A_MAX)
         A_pioneer_arr[~is_pioneer_arr] = 0.0
+        A_relay_arr = np.clip(A_relay_arr + dA_relay * DELTA_T, RELAY_A_MIN, RELAY_A_MAX)
+        A_relay_arr[~relay_activated_arr] = 0.0
+        A_relay_arr[is_pioneer_arr] = 0.0
 
         # Update attributes for optional snapshots/debugging
         for i, cell in enumerate(cells):
@@ -1118,6 +1181,8 @@ def main():
             cell.A_pioneer = A_pioneer_arr[i]
             cell.pulse_active = bool(pulse_active_arr[i])
             cell.pulse_timer = float(pulse_timer_arr[i])
+            cell.relay_activated = bool(relay_activated_arr[i])
+            cell.A_relay = float(A_relay_arr[i])
 
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         # (d) Mouvement (forces + chimiotaxie)
@@ -1220,6 +1285,8 @@ def main():
                     'is_pioneer': cell.is_pioneer,
                     'A_pioneer': cell.A_pioneer,
                     'pulse_active': cell.pulse_active,
+                    'relay_activated': cell.relay_activated,
+                    'A_relay': cell.A_relay,
                 })
 
             # Flush périodique du CSV pour éviter l'accumulation en RAM
@@ -1241,6 +1308,8 @@ def main():
             pde_at_cells = pde_grid[xi_diag, yi_diag].astype(np.float64)
             b_diag = np.array([c.b for c in cells], dtype=np.float64)
             r_T_diag = np.array([c.r_T for c in cells], dtype=np.float64)
+            relay_activated_diag = np.array([c.relay_activated for c in cells], dtype=bool)
+            A_relay_diag = np.array([c.A_relay for c in cells], dtype=np.float64)
             b_frac_diag = b_diag / (q_s / k_t)
             inhibition_diag = np.where(
                 pde_at_cells > 0,
@@ -1273,7 +1342,11 @@ def main():
                 "frac_cells_camp_gt_K_h": float(np.mean(camp_at_cells > K_h)),
                 "frac_grid_camp_gt_K_h": float(np.mean(camp_grid > K_h)),
                 "frac_grid_camp_gt_PDE_threshold": float(np.mean(camp_grid > PDE_threshold)),
-                "n_active_pioneer_pulses": int(np.sum(pulse_active_arr)),
+                "n_active_pioneer_pulses": int(np.sum(pulse_active_arr & is_pioneer_arr)),
+                "n_active_relay_pulses": int(np.sum(pulse_active_arr & (~is_pioneer_arr))),
+                "n_relay_activated": int(np.sum(relay_activated_diag)),
+                "A_relay_mean": float(A_relay_diag[relay_activated_diag].mean()) if np.any(relay_activated_diag) else 0.0,
+                "A_relay_max": float(A_relay_diag[relay_activated_diag].max()) if np.any(relay_activated_diag) else 0.0,
                 "A_pioneer_mean": float(A_pioneer_arr[is_pioneer_arr].mean()) if np.any(is_pioneer_arr) else 0.0,
                 "A_pioneer_max": float(A_pioneer_arr[is_pioneer_arr].max()) if np.any(is_pioneer_arr) else 0.0,
                 "n_pioneer_cells": int(np.sum(is_pioneer_arr)),
@@ -1294,9 +1367,12 @@ def main():
                 f"prod/deg={prod_deg_ratio:.3g} | "
                 f"b/bmax={diagnostics_row['b_frac_mean']:.3g} | "
                 f"r_T={diagnostics_row['r_T_mean']:.3g} | "
-                f"pulses={diagnostics_row['n_active_pioneer_pulses']} | "
+                f"pulses_pio={diagnostics_row['n_active_pioneer_pulses']} | "
+                f"pulses_relay={diagnostics_row['n_active_relay_pulses']} | "
+                f"Nrelay_on={diagnostics_row['n_relay_activated']} | "
                 f"Npioneer={diagnostics_row['n_pioneer_cells']} | "
-                f"Amax={diagnostics_row['A_pioneer_max']:.2f}"
+                f"Apio_max={diagnostics_row['A_pioneer_max']:.2f} | "
+                f"Arelay_max={diagnostics_row['A_relay_max']:.2f}"
             )
 
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
