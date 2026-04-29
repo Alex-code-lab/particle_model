@@ -57,7 +57,7 @@ use_saved_snap_shot = False
 # ------------------
 # Espace / Temps
 # ------------------
-SPACE_SIZE = 400.0   # taille du domaine de la simulation (microns)
+SPACE_SIZE = 1000.0   # taille du domaine de la simulation (microns)
 TIME_SIMU = 300.0     # durée de la simulation (minutes)
 PLOT_INTERVAL = 250   # fréquence de traçage/sauvegarde
 
@@ -131,7 +131,7 @@ PIONEER_A_RESET = 0.04         # remise à zéro après un pulse
 PIONEER_A_RECOVERY = 0.050     # récupération un peu accélérée pour retrouver plusieurs pulses dans un test court
 PIONEER_PULSE_DURATION = 2.8   # durée d'un pulse autonome (min)
 PIONEER_PULSE_STRENGTH = 1.0   # activation AC pendant le pulse
-F0_PIONEER_BASE = 0.01         # faible activité basale des pionnières, comme f0_pacemaker dans le test 1D
+F0_PIONEER_BASE = 0.0          # pas de source tonique : une pionnière pulse puis se tait
 F0_RELAY_BASE = 0.0            # cellules relais silencieuses sans stimulation
 
 # Cellules relais activées : une exposition au cAMP les fait entrer durablement
@@ -162,7 +162,7 @@ MIN_CAMP_SENSITIVITY = 1e-9
 # ------------------
 PACKING_FRACTION = 0.8
 estimated_cell_area = math.pi * (R_EQ)**2
-N_CELLS = 500
+N_CELLS = 3000
 print(f"Nombre de cellules = {N_CELLS}")
 
 # ------------------
@@ -830,8 +830,8 @@ def main():
                 save_initial_state(cells, GENERAL_PATH + "initial_state.pkl")
 
         # ---- Initialisation biologique : état de famine ----
-        # Toutes les cellules partent du silence (b=0). Seules les pionnières (f0_AC>0)
-        # accumuleront du cAMP intracellulaire de façon constitutive et déclencheront la propagation.
+        # Toutes les cellules partent du silence (b=0). Les pionnières déclenchent
+        # par A_pioneer, sans production constitutive permanente.
         # Avec K_relay=1e-4, C* = 1.2 nM. b_frac=0.005 créerait ~187 nM de fond >> C* → déclencherait
         # toutes les cellules immédiatement. On part donc de b=0 pour toutes les non-pionnières.
         rng_bio = np.random.default_rng(seed=0)
@@ -960,6 +960,7 @@ def main():
     # Variables pionnières / pacemaker par cellule
     f0_arr = np.array([getattr(c, 'f0_AC', 0.0) for c in cells], dtype=np.float64)
     is_pioneer_arr = np.array([getattr(c, 'is_pioneer', False) for c in cells], dtype=bool)
+    f0_arr[is_pioneer_arr] = F0_PIONEER_BASE
     A_pioneer_arr = np.array([getattr(c, 'A_pioneer', 0.0) for c in cells], dtype=np.float64)
     pulse_active_arr = np.array([getattr(c, 'pulse_active', False) for c in cells], dtype=bool)
     pulse_timer_arr = np.array([getattr(c, 'pulse_timer', 0.0) for c in cells], dtype=np.float64)
@@ -1097,9 +1098,12 @@ def main():
         # Les relais deviennent des oscillateurs excités après un premier seuil cAMP.
         hill_frac = cAMP_pos ** N_HILL / (K_h ** N_HILL + cAMP_pos ** N_HILL + 1e-60)
 
+        low_signal = (cAMP_pos <= RELAY_REARM_CAMP) & (PDE_mg <= RELAY_REARM_PDE)
+
         pioneer_trigger = (
             is_pioneer_arr
             & (~pulse_active_arr)
+            & low_signal
             & (A_pioneer_arr >= PIONEER_A_TRIGGER)
             & (r_T_mg > 0.8)
             & (hill_frac < 0.2)
@@ -1120,7 +1124,6 @@ def main():
         pulse_timer_arr[first_relay_trigger] = RELAY_PULSE_DURATION
         A_relay_arr[first_relay_trigger] = RELAY_A_RESET
 
-        low_signal = (cAMP_pos <= RELAY_REARM_CAMP) & (PDE_mg <= RELAY_REARM_PDE)
         relay_ready = relay_cells & relay_activated_arr & (~pulse_active_arr) & low_signal
         relay_retrigger = (
             relay_ready
@@ -1153,7 +1156,7 @@ def main():
 
         recovery_drive = r_T_mg * (1.0 - hill_frac)
         dA_pioneer = np.zeros_like(A_pioneer_arr)
-        recovering_pioneers = is_pioneer_arr & (~pulse_active_arr)
+        recovering_pioneers = is_pioneer_arr & (~pulse_active_arr) & low_signal
         dA_pioneer[recovering_pioneers] = (
             PIONEER_A_RECOVERY
             * recovery_drive[recovering_pioneers]
@@ -1176,6 +1179,7 @@ def main():
 
         # Update attributes for optional snapshots/debugging
         for i, cell in enumerate(cells):
+            cell.f0_AC = float(f0_arr[i])
             cell.r_T = r_T_mg[i]
             cell.b   = b_mg[i]
             cell.A_pioneer = A_pioneer_arr[i]
