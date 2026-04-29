@@ -115,7 +115,7 @@ K_relay = 8.0e-5   # gain relais : fenêtre [6.4e-5, 1.2e-4] pour propagation sa
 # Paramètres pour la production de PDE
 # ------------------
 hill_n_PDE = 2
-PDE_rate = 0.004       # production PDE modérée : évite de bloquer immédiatement le relais
+PDE_rate = 3.84e-3     # corrigé : PDE_eq ≈ PDE_inhibition_threshold/10 → L_diffusion ≈ 30 µm
 PDE_threshold = 3e-8  # = K_h : PDE co-activée au seuil récepteur, favorise l'oscillation
 PDE_decay = 0.12       # valeur de la configuration oscillante précédente
 
@@ -132,6 +132,20 @@ PIONEER_PULSE_DURATION = 2.8   # durée d'un pulse autonome (min)
 PIONEER_PULSE_STRENGTH = 1.0   # activation AC pendant le pulse
 F0_PIONEER_BASE = 0.01         # faible activité basale des pionnières, comme f0_pacemaker dans le test 1D
 F0_RELAY_BASE = 0.0            # cellules relais silencieuses sans stimulation
+
+# Cellules relais activées : une exposition au cAMP les fait entrer durablement
+# dans un cycle pulse -> inhibition/récupération -> pulse.
+RELAY_CAMP_TRIGGER = K_h
+RELAY_REARM_CAMP = 0.2 * K_h
+RELAY_REARM_PDE = 0.5 * PDE_inhibition_threshold
+RELAY_A_MIN = 0.0
+RELAY_A_MAX = 1.0
+RELAY_A_TRIGGER = 0.95
+RELAY_A_RESET = 0.0
+RELAY_A_RECOVERY = 0.35
+RELAY_RT_RETRIGGER = 0.65
+RELAY_PULSE_DURATION = 2.8
+RELAY_PULSE_STRENGTH = 1.0
 
 # ------------------
 # Paramètres Chimiotaxie
@@ -343,6 +357,8 @@ class CellAgent:
         self.A_pioneer = 0.0
         self.pulse_active = False
         self.pulse_timer = 0.0
+        self.relay_activated = False
+        self.A_relay = 0.0
 
 
 class Population:
@@ -549,6 +565,18 @@ def save_simulation_parameters(filename="simulation_parameters.txt"):
         f.write(f"F0_PIONEER_BASE = {F0_PIONEER_BASE}\n")
         f.write(f"F0_RELAY_BASE = {F0_RELAY_BASE}\n\n")
 
+        f.write(f"RELAY_CAMP_TRIGGER = {RELAY_CAMP_TRIGGER}\n")
+        f.write(f"RELAY_REARM_CAMP = {RELAY_REARM_CAMP}\n")
+        f.write(f"RELAY_REARM_PDE = {RELAY_REARM_PDE}\n")
+        f.write(f"RELAY_A_MIN = {RELAY_A_MIN}\n")
+        f.write(f"RELAY_A_MAX = {RELAY_A_MAX}\n")
+        f.write(f"RELAY_A_TRIGGER = {RELAY_A_TRIGGER}\n")
+        f.write(f"RELAY_A_RESET = {RELAY_A_RESET}\n")
+        f.write(f"RELAY_A_RECOVERY = {RELAY_A_RECOVERY}\n")
+        f.write(f"RELAY_RT_RETRIGGER = {RELAY_RT_RETRIGGER}\n")
+        f.write(f"RELAY_PULSE_DURATION = {RELAY_PULSE_DURATION}\n")
+        f.write(f"RELAY_PULSE_STRENGTH = {RELAY_PULSE_STRENGTH}\n\n")
+
         f.write(f"PACKING_FRACTION = {PACKING_FRACTION}\n")
         f.write(f"N_CELLS = {N_CELLS}\n")
         f.write(f"MIN_DISTANCE_INIT = {MIN_DISTANCE_INIT}\n\n")
@@ -592,6 +620,8 @@ def save_initial_state(cells, filename="initial_state.pkl"):
             'A_pioneer': cell.A_pioneer,
             'pulse_active': cell.pulse_active,
             'pulse_timer': cell.pulse_timer,
+            'relay_activated': cell.relay_activated,
+            'A_relay': cell.A_relay,
         }
         for cell in cells
     ]
@@ -624,6 +654,8 @@ def load_initial_state(filename="initial_state.pkl"):
         cell.A_pioneer = data.get('A_pioneer', PIONEER_A_INITIAL if cell.is_pioneer else 0.0)
         cell.pulse_active = data.get('pulse_active', False)
         cell.pulse_timer = data.get('pulse_timer', 0.0)
+        cell.relay_activated = data.get('relay_activated', False)
+        cell.A_relay = data.get('A_relay', 0.0)
         loaded_cells.append(cell)
     print(f"État initial chargé depuis '{filename}'")
     return loaded_cells
@@ -658,6 +690,8 @@ def save_snapshot(time, iteration, cells, camp_grid, pde_grid,
             "A_pioneer": cell.A_pioneer,
             "pulse_active": cell.pulse_active,
             "pulse_timer": cell.pulse_timer,
+            "relay_activated": cell.relay_activated,
+            "A_relay": cell.A_relay,
         })
     path_file = os.path.join(path, filename)
     with open(path_file, "wb") as f:
@@ -700,6 +734,8 @@ def load_snapshot(path=GENERAL_PATH, filename="snapshot.pkl"):
         cell.A_pioneer = cell_data.get("A_pioneer", PIONEER_A_INITIAL if cell.is_pioneer else 0.0)
         cell.pulse_active = cell_data.get("pulse_active", False)
         cell.pulse_timer = cell_data.get("pulse_timer", 0.0)
+        cell.relay_activated = cell_data.get("relay_activated", False)
+        cell.A_relay = cell_data.get("A_relay", 0.0)
         cells.append(cell)
 
     print(f"Snapshot chargé depuis {filepath}")
@@ -953,7 +989,7 @@ def main():
             )
             # En 2D, la production est déposée sur une surface de grille.
             # On conserve donc l'échelle surfacique utilisée avant la dérive des paramètres.
-            cAMP_brut_arr = (rho * alpha0 + K_relay * (b_arr_prod / b_max) * inhibition) * delta_t_prod / (GRID_RESOLUTION ** 2)
+            cAMP_brut_arr = (rho * alpha0 + K_relay * (b_arr_prod / b_max)) * delta_t_prod / (GRID_RESOLUTION ** 2)
 
             # Production de PDE vectorisée — même raisonnement : taux × delta_t_prod
             # Bug corrigé : sans ce facteur dt, la PDE s'accumule ~200× trop vite
