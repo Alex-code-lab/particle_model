@@ -58,8 +58,12 @@ use_saved_snap_shot = False
 # Espace / Temps
 # ------------------
 SPACE_SIZE = 1000.0   # taille du domaine de la simulation (microns)
-TIME_SIMU = 300.0     # durée de la simulation (minutes)
-PLOT_INTERVAL = 250   # fréquence de traçage/sauvegarde
+TIME_SIMU = 600.0     # durée de la simulation (minutes)
+PLOT_INTERVAL = 1000   # fréquence de traçage/sauvegarde en png
+FIELD_DUMP_INTERVAL = 500   # dump des champs .npy toutes les 500 pas = 0.5 min (DELTA_T=0.001)
+LOG_EVERY_MVT = 20          # logger 1 pas de mouvement sur 20 dans simulation_data.csv
+                            # (1 = tout, 20 = ~0.4 min de resolution, divise le CSV par 20)
+
 
 delta_t_diff = 0.001
 delta_t_prod = 0.005
@@ -68,9 +72,9 @@ delta_t_mvt  = 0.02
 # ------------------
 # Paramètres "physiques" (forces)
 # ------------------
-MU = 0.0              # coefficient de mobilité — 0 pour valider d'abord la diffusion sans mouvement
-F_REP = 51.2          # force répulsive maximale
-F_ADH = 8.96          # force adhésive maximale
+MU = 0.005              # coefficient de mobilité — 0 pour valider d'abord la diffusion sans mouvement
+F_REP = 1500 # 51.2          # force répulsive maximale
+F_ADH = 25 #8.96          # force adhésive maximale
 R_EQ = 8.0             # distance d'équilibre (µm) — diamètre réel Dictyostelium ~10 µm → R_EQ ≈ diamètre
 R_0 = 12.0            # distance maximale d'interaction (µm) — 1.5 × R_EQ
 COEFF_REP = 0.5       # coefficient pour la répulsion
@@ -81,24 +85,24 @@ FLUCTUATION_FACTOR = 0
 # Paramètres "biochimiques" (cAMP / PDE)
 # ------------------
 GRID_RESOLUTION = 2.0        # taille d'une case en microns (2 µm → grille 500×500 pour 1000 µm)
-D_CAMP = 300.0               # Diffusion du cAMP (µm²/min) — lit. 240-600 µm²/min ; L=√(D/J)=27 µm > espacement cellulaire
+D_CAMP = 400.0  #300             # Diffusion du cAMP (µm²/min) — lit. 240-600 µm²/min ; L=√(D/J)=27 µm > espacement cellulaire
 D_PDE = 50.0                 # Diffusion de la PDE (µm²/min)
 rho = 0.0                    # Pas de production basale : toute sécrétion passe par le relais (b > 0)
 alpha0 = 5.5e-5              # (inutilisé si rho=0 — conservé pour référence)
 J = 0.20                     # perte globale minimale, comme dans le test 1D fonctionnel
-PDE_inhibition_threshold = 8.0e-5  # seuil PDE repris du test 1D fonctionnel
-k_PDE = 2e4                  # dégradation cAMP par PDE reprise du test 1D fonctionnel
+PDE_inhibition_threshold = 5.0e-5  # 8e-5 seuil PDE repris du test 1D fonctionnel
+k_PDE = 8e4 #3e4                 # dégradation cAMP par PDE reprise du test 1D fonctionnel
 
 # ------------------
 # Martiel–Goldbeter (paramètres cellulaires)
 # ------------------
-F1_base = 0.8    # taux de désensibilisation (min⁻¹) — réfractaire modéré pour permettre le relais
-F2_base = 0.06   # taux de réactivation (min⁻¹) — récupération suffisante entre deux vagues
+F1_base = 0.6    # taux de désensibilisation (min⁻¹) — réfractaire modéré pour permettre le relais
+F2_base = 0.20 #0.15  # taux de réactivation (min⁻¹) — récupération suffisante entre deux vagues
 N_HILL = 4       # exposant de Hill : réponse excitable coopérative
 K_h = 3e-8       # constante demi-saturation (M) = 30 nM
 
 q_s = 2.0e-5     # production intracellulaire (cAMP/min) — renforce la réponse relais
-k_t = 0.9        # dégradation intracellulaire (min^-1)
+k_t = 0.9       # dégradation intracellulaire (min^-1)
 
 # ------------------
 # Paramètres pour la production extracellulaire de cAMP
@@ -109,7 +113,7 @@ cAMP_max = 1e-6
 # Gain du relais : amplitude maximale de production induite (M/min par cellule par µm²)
 # Remplace l'implicite "1.0 M/min" qui était hors échelle.
 # Cible : pic de vague ≈ 300 nM → K_relay = cAMP_pic × J / densité_cellulaire
-K_relay = 8.0e-5   # gain relais : fenêtre [6.4e-5, 1.2e-4] pour propagation sans faux état stationnaire
+K_relay = 8e-5 #8.0e-5   # gain relais : fenêtre [6.4e-5, 1.2e-4] pour propagation sans faux état stationnaire
 CAMP_EMISSION_B_FRAC_THRESHOLD = 0.05  # affichage : cellule considérée émettrice si b/bmax >= 5 %
 
 # ------------------
@@ -122,7 +126,7 @@ PDE_decay = 0.12       # valeur de la configuration oscillante précédente
 
 # Cellules pionnières / pacemaker de famine
 # ------------------
-PIONEER_FRACTION = 0.02        # fraction de cellules pionnières autonomes pour les tests courts
+PIONEER_FRACTION = 0.002 #0.001 #0.02       # fraction de cellules pionnières autonomes pour les tests courts
 PIONEER_A_INITIAL = 0.74       # proche du seuil pour déclencher des pulses rapidement sans attendre 40 min
 PIONEER_A_MIN = 0.02
 PIONEER_A_MAX = 1.0
@@ -144,25 +148,25 @@ RELAY_A_MAX = 1.0
 RELAY_A_TRIGGER = 0.95
 RELAY_A_RESET = 0.0
 RELAY_A_RECOVERY = 0.35
-RELAY_RT_RETRIGGER = 0.65
-RELAY_PULSE_DURATION = 2.8
+RELAY_RT_RETRIGGER = 0.8 # 0.65
+RELAY_PULSE_DURATION = 0.7 #1.5
 RELAY_PULSE_STRENGTH = 1.0
 
 # ------------------
 # Paramètres Chimiotaxie
 # ------------------
-CHI_CHEMO = 10
-ALPHA_CHEMO = 2e4
+CHI_CHEMO = 20 # 10
+ALPHA_CHEMO = 5e4 #2e4
 LAMBDA_CHEMO = 10
 BETA_CHEMO_DERIV = 0.3     # pondère l'effet de la dérivée du cAMP sur la direction
-MIN_CAMP_SENSITIVITY = 1e-9
+MIN_CAMP_SENSITIVITY = 1e-9 # 1e-8
 
 # ------------------
 # Paramètres population
 # ------------------
 PACKING_FRACTION = 0.8
 estimated_cell_area = math.pi * (R_EQ)**2
-N_CELLS = 3000
+N_CELLS = 8000
 print(f"Nombre de cellules = {N_CELLS}")
 
 # ------------------
@@ -190,19 +194,19 @@ if not math.isclose(delta_t_prod / dt_base, ratio_prod, rel_tol=1e-6):
 # ------------------
  # Test biochimie/diffusion seul : cellules immobiles.
 # Une fois les ondes validées, remettre les vitesses pour tester la motilité.
-velocity_magnitude_pop1 = 0.0
-ECART_TYPE_POP1 = 0.0
-NOISE_POP_1 = 0.0
+velocity_magnitude_pop1 = 0.7 # 0.25
+ECART_TYPE_POP1 = 0.5
+NOISE_POP_1 = 1.0
 TAU_POP_1 = 5
-PERSISTENCE_POP1 = 0.0
+PERSISTENCE_POP1 = 1.0
 
-velocity_magnitude_pop2 = 0.0
-ECART_TYPE_POP2 = 0.0
-NOISE_POP_2 = 0.0
+velocity_magnitude_pop2 = 0.5 # 0.5
+ECART_TYPE_POP2 = 0.2
+NOISE_POP_2 = 1.0
 TAU_POP_2 = 5
-PERSISTENCE_POP2 = 0.0
+PERSISTENCE_POP2 = 1.0
 
-MIN_DISTANCE_INIT = 2 * R_EQ
+MIN_DISTANCE_INIT = 1.5 * R_EQ
 
 pop1 = N_CELLS // 2
 pop2 = N_CELLS - pop1
@@ -461,13 +465,19 @@ def plot_cells_and_fields(cells, camp_grid, pde_grid, iteration, time_now,
     yvals_pop1 = [c.position[1].item() for c in cells if c.pop == "Population 1"]
     xvals_pop2 = [c.position[0].item() for c in cells if c.pop == "Population 2"]
     yvals_pop2 = [c.position[1].item() for c in cells if c.pop == "Population 2"]
+    xvals_pioneer = [c.position[0].item() for c in cells if c.is_pioneer]
+    yvals_pioneer = [c.position[1].item() for c in cells if c.is_pioneer]
 
     b_max = q_s / k_t
     emission_label_added = False
+    emitting_x = []
+    emitting_y = []
     for cell in cells:
         b_frac = cell.b / b_max if b_max > 0 else 0.0
         emits_camp = cell.pulse_active or (b_frac >= CAMP_EMISSION_B_FRAC_THRESHOLD)
         if emits_camp:
+            emitting_x.append(cell.position[0].item())
+            emitting_y.append(cell.position[1].item())
             emission_patch = patches.Circle(
                 (cell.position[0].item(), cell.position[1].item()),
                 R_EQ,
@@ -482,6 +492,28 @@ def plot_cells_and_fields(cells, camp_grid, pde_grid, iteration, time_now,
 
     ax.scatter(xvals_pop1, yvals_pop1, s=10, color='blue', alpha=0.6, label="Population 1", zorder=3)
     ax.scatter(xvals_pop2, yvals_pop2, s=10, color='red',  alpha=0.6, label="Population 2", zorder=3)
+    if xvals_pioneer:
+        ax.scatter(
+            xvals_pioneer, yvals_pioneer,
+            s=24,
+            facecolor='yellow',
+            edgecolor='black',
+            linewidth=0.4,
+            alpha=0.95,
+            label="Pionnières",
+            zorder=5,
+        )
+    if emitting_x:
+        ax.scatter(
+            emitting_x, emitting_y,
+            s=34,
+            facecolor='none',
+            edgecolor='limegreen',
+            linewidth=1.0,
+            alpha=0.95,
+            label="_nolegend_",
+            zorder=6,
+        )
     for cell in cells:
         circle = patches.Circle(
             (cell.position[0].item(), cell.position[1].item()),
@@ -863,7 +895,9 @@ def main():
             cells[idx].f0_AC = F0_PIONEER_BASE
             # Initialisation de la configuration oscillante précédente :
             # les pionnières ne sont pas toutes collées au seuil, ce qui évite un unique gros pic initial.
-            cells[idx].A_pioneer = float(rng_pio.uniform(PIONEER_A_INITIAL - 0.06, PIONEER_A_INITIAL + 0.03))
+            # cells[idx].A_pioneer = float(rng_pio.uniform(PIONEER_A_INITIAL - 0.06, PIONEER_A_INITIAL + 0.03))
+            cells[idx].A_pioneer = float(rng_pio.uniform(PIONEER_A_MIN, PIONEER_A_INITIAL))  # ex. [0.02, 0.74]
+
             cells[idx].pulse_active = False
             cells[idx].pulse_timer = 0.0
             cells[idx].b = 0.0
@@ -921,7 +955,18 @@ def main():
     csv_path = os.path.join(output_path, "simulation_data.csv")
     csv_header_written = os.path.exists(csv_path)
     # Seuil de flush : dès qu'on a accumulé PLOT_INTERVAL pas de mouvement
-    flush_threshold = PLOT_INTERVAL * len(cells)
+    # flush_threshold = PLOT_INTERVAL * len(cells)
+    flush_threshold = min(PLOT_INTERVAL * len(cells), 200_000)   # plafonne à ~150 Mo
+
+
+    # --------------------------------------------------
+    # Dump des champs cAMP/PDE en .npy (cadence dédiée)
+    # --------------------------------------------------
+    fields_dir = os.path.join(output_path, "fields")
+    os.makedirs(fields_dir, exist_ok=True)
+    field_times_path = os.path.join(output_path, "field_times.csv")
+    field_times_header_written = os.path.exists(field_times_path)
+
 
     # Tenseurs constants pour autovel vectorisé (invariants sur toute la simulation)
     tau_t   = torch.tensor([c.tau   for c in cells], device=device, dtype=torch.float)  # (N,)
@@ -1204,7 +1249,8 @@ def main():
             )
 
             fluctuations = (torch.rand_like(v0) - 0.5) * FLUCTUATION_FACTOR
-            displacement = MU * force_field * DELTA_T + (v0 + fluctuations) * directions * DELTA_T
+            # displacement = MU * force_field * DELTA_T + (v0 + fluctuations) * directions * DELTA_T
+            displacement = MU * force_field * delta_t_mvt + (v0 + fluctuations) * directions * delta_t_mvt
 
             positions = torch.remainder(positions + displacement, SPACE_SIZE)
 
@@ -1248,9 +1294,12 @@ def main():
                 directions[:, 0] * dX_norm[:, 1] - directions[:, 1] * dX_norm[:, 0],
                 -0.9999999, 0.9999999
             )
-            dtheta   = torch.arcsin(cross) * DELTA_T / tau_t
+            # dtheta   = torch.arcsin(cross) * DELTA_T / tau_t
+            dtheta   = torch.arcsin(cross) * delta_t_mvt / tau_t
+            # rnd      = (2.0 * math.pi * (torch.rand(len(cells), device=device) - 0.5)) \
+            #            * noise_t * math.sqrt(DELTA_T)
             rnd      = (2.0 * math.pi * (torch.rand(len(cells), device=device) - 0.5)) \
-                       * noise_t * math.sqrt(DELTA_T)
+                       * noise_t * math.sqrt(delta_t_mvt)
             th_new   = theta + dtheta + rnd
             auto_dirs = torch.stack([torch.cos(th_new), torch.sin(th_new)], dim=1)  # (N,2)
 
@@ -1270,28 +1319,32 @@ def main():
                 auto_dirs
             )  # (N,2)
 
-            # Write-back + logging fusionnés — une seule boucle (P1)
+            # Write-back (toujours) + logging sous-echantillonne
+            # Le write-back doit etre fait a chaque pas (dynamique).
+            # Le log au CSV peut etre saute pour reduire le volume sur disque.
+            log_this_step = ((iteration // ratio_mouvement) % LOG_EVERY_MVT == 0)
             for i, cell in enumerate(cells):
                 cell.position  = positions[i]
                 cell.direction = directions[i]
                 cell.last_cAMP = local_cAMP_mv[i]
-                data_log.append({
-                    'frame':   iteration,
-                    'time':    time,
-                    'cell_id': cell.id,
-                    'pop_tag': cell.pop,
-                    'x':       cell.position[0].item(),
-                    'y':       cell.position[1].item(),
-                    'dir_x':   cell.direction[0].item(),
-                    'dir_y':   cell.direction[1].item(),
-                    'b':       cell.b,
-                    'r_T':     cell.r_T,
-                    'is_pioneer': cell.is_pioneer,
-                    'A_pioneer': cell.A_pioneer,
-                    'pulse_active': cell.pulse_active,
-                    'relay_activated': cell.relay_activated,
-                    'A_relay': cell.A_relay,
-                })
+                if log_this_step:
+                    data_log.append({
+                        'frame':   iteration,
+                        'time':    time,
+                        'cell_id': cell.id,
+                        'pop_tag': cell.pop,
+                        'x':       cell.position[0].item(),
+                        'y':       cell.position[1].item(),
+                        'dir_x':   cell.direction[0].item(),
+                        'dir_y':   cell.direction[1].item(),
+                        'b':       cell.b,
+                        'r_T':     cell.r_T,
+                        'is_pioneer': cell.is_pioneer,
+                        'A_pioneer': cell.A_pioneer,
+                        'pulse_active': cell.pulse_active,
+                        'relay_activated': cell.relay_activated,
+                        'A_relay': cell.A_relay,
+                    })
 
             # Flush périodique du CSV pour éviter l'accumulation en RAM
             if len(data_log) >= flush_threshold:
@@ -1300,6 +1353,18 @@ def main():
                                   header=not csv_header_written, index=False)
                 csv_header_written = True
                 data_log = []
+
+        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        # Dump des champs (cadence dédiée, indépendante des PNG)
+        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        if iteration % FIELD_DUMP_INTERVAL == 0:
+            np.save(os.path.join(fields_dir, f"camp_{iteration}.npy"), camp_grid)
+            np.save(os.path.join(fields_dir, f"pde_{iteration}.npy"),  pde_grid)
+            pd.DataFrame([{"iteration": iteration, "time": time}]).to_csv(
+                field_times_path, mode='a',
+                header=not field_times_header_written, index=False
+            )
+            field_times_header_written = True
 
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         # Diagnostics réaction/diffusion
